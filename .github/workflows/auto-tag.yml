@@ -9,6 +9,8 @@ name: Auto-tag
 on:
   push:
     branches: [main]
+    paths:
+      - "src/**"
 
 jobs:
   bump-minor:
