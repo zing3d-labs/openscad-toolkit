@@ -13,17 +13,30 @@ OpenSCAD build tools. Currently includes a **SCAD compiler** that inlines `use`/
 
 ## Installation
 
-### pip (from git, no registry)
+### uvx (no install required)
+
+[Install uv](https://docs.astral.sh/uv/getting-started/installation/), then run directly without installing anything:
 
 ```bash
-pip install "git+https://github.com/zing3d-labs/openscad-toolkit"
+uvx --from "git+https://github.com/zing3d-labs/openscad-toolkit" scad-compiler my_model.scad
+```
+
+To avoid typing the full command every time, add an alias to your shell profile:
+
+```bash
+alias scad-compiler='uvx --from "git+https://github.com/zing3d-labs/openscad-toolkit" scad-compiler'
 ```
 
 ### Docker
 
 ```bash
-docker pull ghcr.io/zing3d-labs/openscad-toolkit:latest
-docker run --rm -v "$PWD":/work ghcr.io/zing3d-labs/openscad-toolkit input.scad -o output.scad
+docker run --rm -v "$PWD":/work ghcr.io/zing3d-labs/openscad-toolkit:latest input.scad -o output.scad
+```
+
+### pip (alternative)
+
+```bash
+pip install "git+https://github.com/zing3d-labs/openscad-toolkit"
 ```
 
 ### GitHub Action
@@ -95,15 +108,22 @@ bracket(Width);
 
 ## Usage
 
+**uvx:**
 ```bash
-# Compile to stdout
-scad-compiler my_model.scad
+uvx --from "git+https://github.com/zing3d-labs/openscad-toolkit" scad-compiler my_model.scad -o compiled.scad
+uvx --from "git+https://github.com/zing3d-labs/openscad-toolkit" scad-compiler my_model.scad -l BOSL2/ -l parts/ -o compiled.scad
+```
 
-# Write to file
-scad-compiler my_model.scad -o my_model_compiled.scad
+**Docker:**
+```bash
+docker run --rm -v "$PWD":/work ghcr.io/zing3d-labs/openscad-toolkit:latest my_model.scad -o compiled.scad
+docker run --rm -v "$PWD":/work ghcr.io/zing3d-labs/openscad-toolkit:latest my_model.scad -l BOSL2/ -l parts/ -o compiled.scad
+```
 
-# Preserve external library references (don't try to inline them)
-scad-compiler my_model.scad -l BOSL2/ -l QuackWorks/ -o output.scad
+**With the alias (or after `pip install`):**
+```bash
+scad-compiler my_model.scad -o compiled.scad
+scad-compiler my_model.scad -l BOSL2/ -l parts/ -o compiled.scad
 ```
 
 ### Options
