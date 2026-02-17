@@ -1,10 +1,10 @@
 """STL rendering tests: compile a fixture, render both original and compiled to STL,
 and verify the geometry (facet count) is identical."""
 
+import pathlib
 import shutil
 import struct
 import subprocess
-import pathlib
 
 import pytest
 
