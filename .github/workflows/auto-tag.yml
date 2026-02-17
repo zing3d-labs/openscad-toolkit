@@ -1,0 +1,41 @@
+name: Auto-tag
+
+# Fires on every merge to main. Bumps the minor version and pushes a tag,
+# which triggers release.yml to build and publish.
+#
+# TODO: after v1.0.0, switch to PR-title-based versioning (conventional commits)
+# so that fix: → patch, feat: → minor, feat!: → major.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  bump-minor:
+    name: Bump minor version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next tag
+        id: next
+        run: |
+          LATEST=$(git tag -l 'v[0-9]*' | sort -V | tail -1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
+          fi
+          VERSION=${LATEST#v}
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          NEW_TAG="v${MAJOR}.$((MINOR + 1)).0"
+          echo "tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "Bumping $LATEST → $NEW_TAG"
+
+      - name: Push tag
+        run: |
+          git tag "${{ steps.next.outputs.tag }}"
+          git push origin "${{ steps.next.outputs.tag }}"
