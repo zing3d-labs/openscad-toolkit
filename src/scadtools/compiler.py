@@ -68,14 +68,18 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
             inside_module = True
             brace_level = line.count("{") - line.count("}")
 
-            # If no opening brace on this line, look ahead for it
             if brace_level == 0:
-                j = i + 1
-                while j < len(lines) and "{" not in lines[j]:
-                    j += 1
-                if j < len(lines):  # Found line with {
-                    brace_level = lines[j].count("{") - lines[j].count("}")
-                    i = j
+                if "{" not in line:
+                    # No opening brace on this line yet (multiline signature); look ahead
+                    j = i + 1
+                    while j < len(lines) and "{" not in lines[j]:
+                        j += 1
+                    if j < len(lines):  # Found line with {
+                        brace_level = lines[j].count("{") - lines[j].count("}")
+                        i = j
+                else:
+                    # Single-line module: opens and closes on the same line
+                    inside_module = False
 
             i += 1
             continue
@@ -83,7 +87,7 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
         # Track braces when inside module
         if inside_module:
             brace_level += line.count("{") - line.count("}")
-            if brace_level < 0:
+            if brace_level <= 0:
                 inside_module = False
             i += 1
             continue
@@ -261,14 +265,18 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             inside_module = True
             brace_level = line.count("{") - line.count("}")
 
-            # If no opening brace on this line, look ahead for it
             if brace_level == 0:
-                j = i + 1
-                while j < len(lines) and "{" not in lines[j]:
-                    j += 1
-                if j < len(lines):  # Found line with {
-                    brace_level = lines[j].count("{") - lines[j].count("}")
-                    i = j
+                if "{" not in line:
+                    # No opening brace on this line yet (multiline signature); look ahead
+                    j = i + 1
+                    while j < len(lines) and "{" not in lines[j]:
+                        j += 1
+                    if j < len(lines):  # Found line with {
+                        brace_level = lines[j].count("{") - lines[j].count("}")
+                        i = j
+                else:
+                    # Single-line module: opens and closes on the same line
+                    inside_module = False
 
             i += 1
             continue
@@ -276,7 +284,7 @@ def extract_other_statements(lines: list[str]) -> list[str]:
         # Track braces when inside module definition
         if inside_module:
             brace_level += line.count("{") - line.count("}")
-            if brace_level < 0:
+            if brace_level <= 0:
                 inside_module = False
             i += 1
             continue
