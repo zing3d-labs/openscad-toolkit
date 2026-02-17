@@ -30,6 +30,59 @@ docker run --rm -v "$PWD":/work ghcr.io/zing3d-labs/openscad-toolkit input.scad 
 
 > Coming soon — the composite action is planned for a future release.
 
+## Example
+
+**my_model.scad** (before — two files, one `use` each):
+
+```openscad
+use <parts/bracket.scad>   // local module
+use <BOSL2/std.scad>       // external library
+
+/* [Settings] */
+Width = 60;  // [20:120]
+Material = "PLA";  // [PLA, PETG, ABS]
+
+bracket(Width);
+```
+
+**Without `-l`** — compiler tries to inline everything. `BOSL2/std.scad`
+can't be found on disk, so it's kept verbatim with a warning:
+
+```openscad
+use <BOSL2/std.scad>   // ← kept as-is (file not found, warning printed)
+
+/* [Settings] */
+Width = 60;  // [20:120]
+Material = "PLA";  // [PLA, PETG, ABS]
+
+{
+module bracket(w) {
+  cuboid([w, 20, 6], rounding=1);
+}
+}
+
+bracket(Width);
+```
+
+**With `-l BOSL2/`** — the library reference is recognised and moved to
+the top of the output; local dependencies are still inlined:
+
+```openscad
+use <BOSL2/std.scad>   // ← preserved as an explicit external reference
+
+/* [Settings] */
+Width = 60;  // [20:120]
+Material = "PLA";  // [PLA, PETG, ABS]
+
+{
+module bracket(w) {
+  cuboid([w, 20, 6], rounding=1);
+}
+}
+
+bracket(Width);
+```
+
 ## Usage
 
 ```bash
