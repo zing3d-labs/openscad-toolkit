@@ -84,12 +84,10 @@ def test_etli_skips_function_definitions():
 # ---------------------------------------------------------------------------
 
 
-# TODO: brace_level uses < 0 instead of <= 0 so module exit is off by one;
-# top-level calls after a module definition are not extracted. Fix in follow-up PR.
-# def test_eos_module_call():
-#     lines = ["module foo() { cube(1); }\n", "foo();\n"]
-#     output = extract_other_statements(lines)
-#     assert any("foo();" in line for line in output)
+def test_eos_module_call():
+    lines = ["module foo() { cube(1); }\n", "foo();\n"]
+    output = extract_other_statements(lines)
+    assert any("foo();" in line for line in output)
 
 
 def test_eos_skips_variable_assignments():
@@ -99,12 +97,11 @@ def test_eos_skips_variable_assignments():
     assert any("foo();" in line for line in output)
 
 
-# TODO: same brace_level bug — bar(); after closing } is not extracted.
-# def test_eos_skips_module_definitions():
-#     lines = ["module bar() {\n", "  cube(1);\n", "}\n", "bar();\n"]
-#     output = extract_other_statements(lines)
-#     assert not any("module bar" in line for line in output)
-#     assert any("bar();" in line for line in output)
+def test_eos_skips_module_definitions():
+    lines = ["module bar() {\n", "  cube(1);\n", "}\n", "bar();\n"]
+    output = extract_other_statements(lines)
+    assert not any("module bar" in line for line in output)
+    assert any("bar();" in line for line in output)
 
 
 def test_eos_multiline_call():
@@ -166,20 +163,12 @@ def test_emf_multiline_module_signature():
 # ---------------------------------------------------------------------------
 
 
-# TODO: simpleBox(); call not extracted due to brace_level bug — fix in follow-up PR.
-# def test_compile_simple():
-#     result = compile_scad(str(FIXTURES / "simple.scad"))
-#     assert "Width = 10;" in result
-#     assert "Height = 20;" in result
-#     assert "module simpleBox" in result
-#     assert "simpleBox();" in result
-
-
 def test_compile_simple():
     result = compile_scad(str(FIXTURES / "simple.scad"))
     assert "Width = 10;" in result
     assert "Height = 20;" in result
     assert "module simpleBox" in result
+    assert "simpleBox();" in result
 
 
 def test_compile_no_use_in_output():

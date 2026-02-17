@@ -30,6 +30,69 @@ docker run --rm -v "$PWD":/work ghcr.io/zing3d-labs/openscad-toolkit input.scad 
 
 > Coming soon — the composite action is planned for a future release.
 
+## Example
+
+**Source files (before):**
+
+`my_model.scad`
+```openscad
+use <parts/bracket.scad>
+use <BOSL2/std.scad>
+
+/* [Settings] */
+Width = 60;  // [20:120]
+Material = "PLA";  // [PLA, PETG, ABS]
+
+bracket(Width);
+```
+
+`parts/bracket.scad`
+```openscad
+wall = 2;
+
+module bracket(w) {
+  cuboid([w, 20, wall * 3], rounding=1);
+}
+```
+
+---
+
+**`scad-compiler my_model.scad -l BOSL2/ -o compiled.scad`**
+
+Local file is inlined; BOSL2 is preserved as an external reference:
+
+```openscad
+use <BOSL2/std.scad>
+
+/* [Settings] */
+Width = 60;  // [20:120]
+Material = "PLA";  // [PLA, PETG, ABS]
+
+{
+module bracket(w) {
+  cuboid([w, 20, 6], rounding=1);
+}
+}
+
+bracket(Width);
+```
+
+**`scad-compiler my_model.scad -l BOSL2/ -l parts/ -o compiled.scad`**
+
+Both dependencies preserved as external references — useful when
+distributing alongside your local library folder:
+
+```openscad
+use <BOSL2/std.scad>
+use <parts/bracket.scad>
+
+/* [Settings] */
+Width = 60;  // [20:120]
+Material = "PLA";  // [PLA, PETG, ABS]
+
+bracket(Width);
+```
+
 ## Usage
 
 ```bash
