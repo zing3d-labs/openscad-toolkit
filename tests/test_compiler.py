@@ -118,6 +118,109 @@ def test_eos_skips_include_lines():
     assert not any("use <" in line for line in output)
 
 
+# Bug regression tests — one test per specific bug fixed in PR #13
+# ---------------------------------------------------------------------------
+# Bug 1: block statement collector terminated at first internal `;`
+#
+# Before fix: `inside_statement` ended on any line ending with `;`, so a
+# brace-delimited block like `modifier() shape() { ... ; ... }` was truncated
+# after the first internal semicolon — the closing `}` and everything after it
+# was silently dropped.
+#
+# Fix: track `statement_brace_depth`; end the statement only when the brace
+# depth returns to 0 AND the line ends with `;` or `}`.
+# ---------------------------------------------------------------------------
+
+
+def test_eos_block_statement_not_split_at_internal_semicolon():
+    """Brace-delimited block statement must be emitted in full, not truncated at first `;`."""
+    lines = [
+        "down(1) diff()\n",
+        "    cube([10, 20, 2]) {\n",
+        "      attach(TOP) cube([5, 5, 1]);\n",  # internal ';' — must NOT end statement
+        "      attach(BOTTOM) cube([5, 5, 1]);\n",
+        "    }\n",  # closing brace — actual end of statement
+    ]
+    output = extract_other_statements(lines)
+    joined = "".join(output)
+    assert "down(1) diff()" in joined
+    assert "attach(TOP)" in joined
+    assert "attach(BOTTOM)" in joined  # would be missing if statement ended early
+
+
+# ---------------------------------------------------------------------------
+# Bug 2: `==` in a module-call argument misidentified as a variable assignment
+#
+# Before fix: `"=" in line_without_comment` matched `==`, so a line like
+# `down(x == eps ? eps : 0) diff()` was classified as a variable assignment
+# and the entire statement was silently dropped.
+#
+# Fix: only test for `=` in the portion of the line *before* the first `(`.
+# ---------------------------------------------------------------------------
+
+
+def test_eos_equality_operator_not_mistaken_for_assignment():
+    """`==` inside a module-call argument must not suppress the statement."""
+    lines = [
+        "down(x == eps ? eps : 0) diff()\n",
+        "    cuboid([10, 20, 2]);\n",
+    ]
+    output = extract_other_statements(lines)
+    joined = "".join(output)
+    assert "down(x == eps" in joined
+    assert "cuboid" in joined
+
+
+# ---------------------------------------------------------------------------
+# Bug 3: continuation lines of a multi-line variable assignment re-classified
+#
+# Before fix: the `inside_assignment` guard came *after* the variable-detection
+# block, so continuation lines that happened to contain `=` (e.g. ternary
+# expressions like `x == 1 ? A : B`) were re-classified as new assignments and
+# emitted into the output when they should have been silently consumed.
+#
+# Fix: move the `inside_assignment` continuation check *before* the
+# variable-detection block so continuation lines are never re-examined.
+# ---------------------------------------------------------------------------
+
+
+def test_eos_multiline_assignment_continuation_not_reclassified():
+    """Continuation lines of a multi-line assignment must be consumed, not emitted."""
+    lines = [
+        "my_val =\n",
+        "  x == 1 ? A\n",  # contains '==' — must not be re-classified as new assignment
+        "  : B;\n",
+        "foo();\n",
+    ]
+    output = extract_other_statements(lines)
+    joined = "".join(output)
+    assert "my_val" not in joined  # entire assignment skipped
+    assert "foo();" in joined  # call after the assignment is preserved
+
+
+# ---------------------------------------------------------------------------
+# Bug 4: variables assigned from function calls excluded from extraction
+#
+# Before fix: `"("` was in the exclusion keyword list in `extract_top_level_items`,
+# so any line like `Width = max(10, 5);` (which contains `(`) was skipped
+# entirely and never added to the output.
+#
+# Fix: remove `"("` from the exclusion list; instead, guard against module-call
+# misclassification using VARIABLE_NAME_RE (which requires `word =` at the start).
+# ---------------------------------------------------------------------------
+
+
+def test_etli_variable_with_function_call():
+    """Variables assigned via function calls like max() / min() must be extracted."""
+    lines = ["Width = max(10, 5);\n", "Height = min(20, 30);\n"]
+    output, vars_ = extract_top_level_items(lines)
+    assert "Width" in vars_
+    assert "Height" in vars_
+    joined = "".join(output)
+    assert "Width = max(10, 5);" in joined
+    assert "Height = min(20, 30);" in joined
+
+
 # ---------------------------------------------------------------------------
 # extract_modules_and_functions
 # ---------------------------------------------------------------------------
