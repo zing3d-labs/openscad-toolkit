@@ -11,8 +11,26 @@ on:
         required: true
 
 jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create and push tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ inputs.tag }}
+          git push origin ${{ inputs.tag }}
+
   build:
     name: Build
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,15 +93,3 @@ jobs:
           tags: |
             ghcr.io/zing3d-labs/openscad-toolkit:${{ steps.version.outputs.version }}
             ghcr.io/zing3d-labs/openscad-toolkit:latest
-
-  update-action-tag:
-    name: Update v1 tag
-    needs: github-release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - run: |
-          git tag -f v1
-          git push origin v1 --force
