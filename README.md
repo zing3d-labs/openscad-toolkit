@@ -1,6 +1,8 @@
 # openscad-toolkit
 
-OpenSCAD build tools. Currently includes a **SCAD compiler** that inlines `use`/`include` dependencies into a single self-contained `.scad` file, suitable for distribution without requiring end users to install libraries.
+OpenSCAD build tools. Currently includes a **SCAD compiler** that inlines `use`/`include` dependencies into a single self-contained `.scad` file.
+
+The compiler lets you structure your OpenSCAD projects across multiple files for modularity and reuse, then bundle everything into one file for publishing — for example to [MakerWorld](https://makerworld.com) or [Printables](https://www.printables.com), which require a single self-contained `.scad` file for the Customizer to work.
 
 ## What the compiler does
 
@@ -132,6 +134,8 @@ scad-compiler my_model.scad -l BOSL2/ -l parts/ -o compiled.scad
 |---|---|
 | `-o / --output FILE` | Write output to file (default: stdout) |
 | `-l / --library-prefix PREFIX` | Preserve includes matching this prefix as external references. Repeat for multiple. |
+
+> **Note on `-l`:** preserving a library reference only works if the target platform has that library installed. MakerWorld and Printables do not — so omit `-l` when publishing there, and inline everything. Use `-l` when distributing to users who already have the library (e.g. BOSL2) set up locally.
 
 ## License
 
