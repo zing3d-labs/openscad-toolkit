@@ -144,7 +144,7 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
                 # Check if this line starts a variable assignment
                 if "=" in line and not any(
                     keyword in line_without_comment
-                    for keyword in ["(", "module", "function", "linear_extrude", "hull", "union", "if"]
+                    for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
                 ):
                     # Extract variable name
                     var_match = VARIABLE_NAME_RE.match(line)
@@ -207,6 +207,7 @@ def extract_other_statements(lines: list[str]) -> list[str]:
     inside_block_comment = False
     inside_statement = False
     statement_lines: list[str] = []
+    statement_brace_depth = 0
     i = 0
 
     while i < len(lines):
@@ -241,10 +242,15 @@ def extract_other_statements(lines: list[str]) -> list[str]:
         # If we're collecting a multi-line statement (e.g. module call), keep going
         if inside_statement:
             statement_lines.append(line)
-            if stripped.endswith(";"):
+            statement_brace_depth += line.count("{") - line.count("}")
+            is_done = (statement_brace_depth <= 0 and stripped.endswith(";")) or (
+                statement_brace_depth == 0 and stripped.endswith("}")
+            )
+            if is_done:
                 inside_statement = False
                 output.extend(statement_lines)
                 statement_lines = []
+                statement_brace_depth = 0
             i += 1
             continue
 
@@ -303,11 +309,26 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Skip variable assignments at top level
+        # If we are inside a multi-line variable assignment, keep consuming
+        # lines until the terminating semicolon. This check must come before
+        # the variable-assignment detection block so that continuation lines
+        # (which may themselves contain '=') are not re-classified as new
+        # variable assignments.
+        if inside_assignment:
+            if stripped.endswith(";"):
+                inside_assignment = False
+            i += 1
+            continue
+
+        # Skip variable assignments at top level.
+        # Only treat as an assignment when '=' appears before any '(' so that
+        # module calls containing '==' (e.g. `down(x == y) diff()`) are not
+        # incorrectly classified as variable assignments.
         line_without_comment = line.split("//")[0]
-        if "=" in line_without_comment and not any(
+        before_paren = line_without_comment.split("(")[0]
+        if "=" in before_paren and not any(
             keyword in line_without_comment
-            for keyword in ["(", "module", "function", "linear_extrude", "hull", "union", "if"]
+            for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
         ):
             # This looks like a variable assignment, skip it
             if not line_without_comment.rstrip().endswith(";"):
@@ -316,18 +337,12 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        if inside_assignment:
-            if stripped.endswith(";"):
-                inside_assignment = False
-            i += 1
-            continue
-
         # This is some other statement (like a module call) - preserve it
         if not inside_module:
             if not stripped.endswith(";"):
-                # Multi-line statement, collect all lines until semicolon
                 inside_statement = True
                 statement_lines = [line]
+                statement_brace_depth = line.count("{") - line.count("}")
             else:
                 output.append(line)
 

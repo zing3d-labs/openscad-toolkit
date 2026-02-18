@@ -251,3 +251,17 @@ def test_compile_no_library_prefix_by_default():
     """compile_scad accepts None for library_prefixes."""
     result = compile_scad(str(FIXTURES / "simple.scad"), library_prefixes=None)
     assert "Width = 10;" in result
+
+
+def test_compile_block_statement():
+    """Block statements (ending with }) should be fully preserved."""
+    result = compile_scad(str(FIXTURES / "block_statement.scad"))
+    assert "down(1) diff()" in result
+    assert "attach(BOTTOM)" in result  # line after an intermediate ;
+
+
+def test_compile_variable_with_function_call():
+    """Variables assigned from function calls like max() should be extracted."""
+    result = compile_scad(str(FIXTURES / "block_statement.scad"))
+    assert "Width = max(10, 5);" in result
+    assert "Height = min(20, 30);" in result
