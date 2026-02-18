@@ -135,7 +135,7 @@ scad-compiler my_model.scad -l BOSL2/ -l parts/ -o compiled.scad
 | `-o / --output FILE` | Write output to file (default: stdout) |
 | `-l / --library-prefix PREFIX` | Preserve includes matching this prefix as external references. Repeat for multiple. |
 
-> **Note on `-l`:** preserving a library reference only works if the target platform has that library installed. Check what your publishing target supports before using this flag — for example, MakerWorld bundles BOSL2 so `-l BOSL2/` is safe there, but other libraries may need to be inlined. When in doubt, omit `-l` to produce a fully self-contained file.
+> **Note on `-l`:** preserving a library reference only works if the target platform has that library installed. MakerWorld is known to bundle BOSL2, so `-l BOSL2/` is safe when publishing there. For other libraries or platforms, omit `-l` to produce a fully self-contained file.
 
 ## License
 
