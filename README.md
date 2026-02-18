@@ -25,8 +25,16 @@ uvx --from "git+https://github.com/zing3d-labs/openscad-toolkit" scad-compiler m
 
 To avoid typing the full command every time, add an alias to your shell profile:
 
+**bash / zsh** (`~/.bashrc` or `~/.zshrc`):
 ```bash
 alias scad-compiler='uvx --from "git+https://github.com/zing3d-labs/openscad-toolkit" scad-compiler'
+```
+
+**PowerShell** (`$PROFILE.CurrentUserAllHosts`):
+```powershell
+function scad-compiler {
+  uvx --from "git+https://github.com/zing3d-labs/openscad-toolkit" scad-compiler $args
+}
 ```
 
 ### Docker
