@@ -474,69 +474,81 @@ def process_scad_file(
 
     # If only inlining module/function definitions (for `use` lines), extract them
     if only_modules_functions:
-        # Extract top-level items — entry file and used files both get variables,
-        # but deduplication ensures each variable is only defined once
-        top_level_items, new_vars = extract_top_level_items(lines, defined_variables)
-        defined_variables.update(new_vars)
-        for item in top_level_items:
-            output_content.append(item)
+        # Process lines in segments split at include/use boundaries, emitting each
+        # segment's variables before inlining the following include/use in-place.
+        # This preserves dependency order: library variables defined by an `include`
+        # are available to entry-file variables that appear after it in the source.
+        def _inline_include(inc_line: str) -> None:
+            match = INCLUDE_RE.match(inc_line)
+            if not match:
+                return
+            included_filename = match.group(2)
+            kind = match.group(1)
+            is_library_line = any(included_filename.startswith(prefix) for prefix in library_prefixes)
 
-        # Add a separator if we found top-level items
-        if top_level_items:
-            output_content.append("\n")
+            if is_library_line:
+                clean_line = inc_line.strip()
+                if clean_line not in unique_library_includes:
+                    print(f"  -> Registering library include: {clean_line}")
+                    unique_library_includes.append(clean_line)
+                return
 
-        # Process use/include statements in the original file
-        for line in lines:
-            match = INCLUDE_RE.match(line)
-            if match:
-                included_filename = match.group(2)
-                kind = match.group(1)
-                is_library_line = any(included_filename.startswith(prefix) for prefix in library_prefixes)
+            included_filepath = os.path.join(file_dir, included_filename)
+            if not os.path.exists(included_filepath):
+                print(
+                    f"  -> WARNING: Could not find '{included_filename}'. Keeping original line.",
+                    file=sys.stderr,
+                )
+                output_content.append(inc_line)
+                return
 
-                if is_library_line:
-                    clean_line = line.strip()
-                    if clean_line not in unique_library_includes:
-                        print(f"  -> Registering library include: {clean_line}")
-                        unique_library_includes.append(clean_line)
-                    continue
-
-                included_filepath = os.path.join(file_dir, included_filename)
-                if not os.path.exists(included_filepath):
-                    print(
-                        f"  -> WARNING: Could not find '{included_filename}'. Keeping original line.",
-                        file=sys.stderr,
-                    )
-                    output_content.append(line)
-                    continue
-
-                if kind == "include":
-                    print(f"  -> Inlining all content of: {included_filename}")
-                    inlined_content = process_scad_file(
-                        included_filepath,
-                        processed_files,
-                        library_prefixes,
-                        unique_library_includes,
-                        False,
-                        False,
-                        defined_variables,
-                    )
+            if kind == "include":
+                print(f"  -> Inlining all content of: {included_filename}")
+                inlined_content = process_scad_file(
+                    included_filepath,
+                    processed_files,
+                    library_prefixes,
+                    unique_library_includes,
+                    False,
+                    False,
+                    defined_variables,
+                )
+                output_content.append(inlined_content)
+            elif kind == "use":
+                print(f"  -> Inlining only modules/functions from: {included_filename}")
+                inlined_content = process_scad_file(
+                    included_filepath,
+                    processed_files,
+                    library_prefixes,
+                    unique_library_includes,
+                    True,
+                    False,
+                    defined_variables,
+                )
+                # Wrap use'd content in braces to prevent variables from appearing as customizable
+                if inlined_content.strip():
+                    output_content.append("{\n")
                     output_content.append(inlined_content)
-                elif kind == "use":
-                    print(f"  -> Inlining only modules/functions from: {included_filename}")
-                    inlined_content = process_scad_file(
-                        included_filepath,
-                        processed_files,
-                        library_prefixes,
-                        unique_library_includes,
-                        True,
-                        False,
-                        defined_variables,
-                    )
-                    # Wrap use'd content in braces to prevent variables from appearing as customizable
-                    if inlined_content.strip():
-                        output_content.append("{\n")
-                        output_content.append(inlined_content)
-                        output_content.append("}\n")
+                    output_content.append("}\n")
+
+        seg: list[str] = []
+        for line in lines:
+            if INCLUDE_RE.match(line):
+                # Emit variables accumulated in this segment, then inline the include
+                seg_items, new_vars = extract_top_level_items(seg, defined_variables)
+                defined_variables.update(new_vars)
+                output_content.extend(seg_items)
+                seg = []
+                _inline_include(line)
+            else:
+                seg.append(line)
+
+        # Emit variables from the final segment (after the last include)
+        seg_items, new_vars = extract_top_level_items(seg, defined_variables)
+        defined_variables.update(new_vars)
+        output_content.extend(seg_items)
+        if seg_items:
+            output_content.append("\n")
 
         # For entry file, also extract other statements like module calls
         if is_entry_file:
