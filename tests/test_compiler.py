@@ -303,10 +303,14 @@ def test_compile_library_prefix_preserved():
 
 
 def test_compile_library_not_inlined_as_file():
-    """Without a prefix, missing library file keeps the original line (warning)."""
-    # This just verifies it doesn't crash on missing library files
+    """Without a prefix, missing `use` is treated as external (promoted to top)."""
     result = compile_scad(str(FIXTURES / "with_library.scad"), library_prefixes=[])
     assert "LibSize = 30" in result
+    # use <BOSL2/std.scad> should now appear at the top, before any module definitions
+    assert "use <BOSL2/std.scad>" in result
+    lib_pos = result.index("use <BOSL2/std.scad>")
+    lib_size_pos = result.index("LibSize")
+    assert lib_pos < lib_size_pos
 
 
 def test_compile_customizer_comments_preserved():
@@ -404,3 +408,37 @@ def test_compile_deps_out_not_modified_without_kwarg():
     """Calling compile_scad without deps_out should not raise and return normally."""
     result = compile_scad(str(FIXTURES / "simple.scad"))
     assert "Width = 10;" in result
+
+
+# ---------------------------------------------------------------------------
+# compile_scad — missing use/include auto-detection (issue #11)
+# ---------------------------------------------------------------------------
+
+
+def test_compile_missing_use_promoted_to_top():
+    """A missing `use` file should be registered as an external reference at the top."""
+    result = compile_scad(str(FIXTURES / "with_missing_use.scad"))
+    assert "use <nonexistent_library/tool.scad>" in result
+    use_pos = result.index("use <nonexistent_library/tool.scad>")
+    module_pos = result.index("module missingUseUser")
+    assert use_pos < module_pos
+
+
+def test_compile_missing_use_warning(capsys):
+    """A missing `use` file should print a 'not found on disk' warning."""
+    compile_scad(str(FIXTURES / "with_missing_use.scad"))
+    captured = capsys.readouterr()
+    assert "not found on disk" in captured.err
+
+
+def test_compile_missing_include_stays_inline():
+    """A missing `include` file should be kept inline in the output."""
+    result = compile_scad(str(FIXTURES / "with_missing_include.scad"))
+    assert "include <nonexistent_library/defs.scad>" in result
+
+
+def test_compile_missing_include_warning(capsys):
+    """A missing `include` file should print a 'not found on disk' warning."""
+    compile_scad(str(FIXTURES / "with_missing_include.scad"))
+    captured = capsys.readouterr()
+    assert "not found on disk" in captured.err
