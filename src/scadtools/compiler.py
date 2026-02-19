@@ -143,8 +143,7 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
             if not inside_assignment:
                 # Check if this line starts a variable assignment
                 if "=" in line and not any(
-                    keyword in line_without_comment
-                    for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
+                    keyword in line_without_comment for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
                 ):
                     # Extract variable name
                     var_match = VARIABLE_NAME_RE.match(line)
@@ -327,8 +326,7 @@ def extract_other_statements(lines: list[str]) -> list[str]:
         line_without_comment = line.split("//")[0]
         before_paren = line_without_comment.split("(")[0]
         if "=" in before_paren and not any(
-            keyword in line_without_comment
-            for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
+            keyword in line_without_comment for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
         ):
             # This looks like a variable assignment, skip it
             if not line_without_comment.rstrip().endswith(";"):
@@ -495,11 +493,20 @@ def process_scad_file(
 
             included_filepath = os.path.join(file_dir, included_filename)
             if not os.path.exists(included_filepath):
-                print(
-                    f"  -> WARNING: Could not find '{included_filename}'. Keeping original line.",
-                    file=sys.stderr,
-                )
-                output_content.append(inc_line)
+                if kind == "use":
+                    print(
+                        f"  -> WARNING: '{included_filename}' not found on disk — treating as external reference",
+                        file=sys.stderr,
+                    )
+                    clean_line = inc_line.strip()
+                    if clean_line not in unique_library_includes:
+                        unique_library_includes.append(clean_line)
+                else:
+                    print(
+                        f"  -> WARNING: '{included_filename}' not found on disk — keeping inline (include order matters)",
+                        file=sys.stderr,
+                    )
+                    output_content.append(inc_line)
                 return
 
             if kind == "include":
@@ -626,11 +633,20 @@ def process_scad_file(
 
         included_filepath = os.path.join(file_dir, included_filename)
         if not os.path.exists(included_filepath):
-            print(
-                f"  -> WARNING: Could not find '{included_filename}'. Keeping original line.",
-                file=sys.stderr,
-            )
-            output_content.append(line)
+            if kind == "use":
+                print(
+                    f"  -> WARNING: '{included_filename}' not found on disk — treating as external reference",
+                    file=sys.stderr,
+                )
+                clean_line = line.strip()
+                if clean_line not in unique_library_includes:
+                    unique_library_includes.append(clean_line)
+            else:
+                print(
+                    f"  -> WARNING: '{included_filename}' not found on disk — keeping inline (include order matters)",
+                    file=sys.stderr,
+                )
+                output_content.append(line)
             continue
 
         if kind == "include":
