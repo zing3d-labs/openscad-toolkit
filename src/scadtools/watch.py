@@ -27,6 +27,7 @@ def watch_scad(input_file: str, library_prefixes: list[str] | None = None, outpu
 
     from scadtools.compiler import compile_scad
 
+    output_path = str(Path(output).resolve())
     watched_dirs: set[str] = set()
     observer: Observer = Observer()
 
@@ -39,13 +40,16 @@ def watch_scad(input_file: str, library_prefixes: list[str] | None = None, outpu
             print(f"[watch] ERROR — {exc}", file=sys.stderr)
         return deps
 
+    def _is_output_file(path: str) -> bool:
+        return str(Path(path).resolve()) == output_path
+
     class RecompileHandler(FileSystemEventHandler):
         def on_modified(self, event: FileSystemEvent) -> None:
-            if not event.is_directory and str(event.src_path).endswith(".scad"):
+            if not event.is_directory and str(event.src_path).endswith(".scad") and not _is_output_file(str(event.src_path)):
                 _recompile()
 
         def on_created(self, event: FileSystemEvent) -> None:
-            if not event.is_directory and str(event.src_path).endswith(".scad"):
+            if not event.is_directory and str(event.src_path).endswith(".scad") and not _is_output_file(str(event.src_path)):
                 _recompile()
 
     def _recompile() -> None:
