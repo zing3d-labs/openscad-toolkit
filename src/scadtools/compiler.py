@@ -495,11 +495,21 @@ def process_scad_file(
 
             included_filepath = os.path.join(file_dir, included_filename)
             if not os.path.exists(included_filepath):
-                print(
-                    f"  -> WARNING: Could not find '{included_filename}'. Keeping original line.",
-                    file=sys.stderr,
-                )
-                output_content.append(inc_line)
+                if kind == "use":
+                    print(
+                        f"  -> WARNING: '{included_filename}' not found on disk — treating as external reference",
+                        file=sys.stderr,
+                    )
+                    clean_line = inc_line.strip()
+                    if clean_line not in unique_library_includes:
+                        unique_library_includes.append(clean_line)
+                else:
+                    print(
+                        f"  -> WARNING: '{included_filename}' not found on disk"
+                        " — keeping inline (include order matters)",
+                        file=sys.stderr,
+                    )
+                    output_content.append(inc_line)
                 return
 
             if kind == "include":
@@ -626,11 +636,20 @@ def process_scad_file(
 
         included_filepath = os.path.join(file_dir, included_filename)
         if not os.path.exists(included_filepath):
-            print(
-                f"  -> WARNING: Could not find '{included_filename}'. Keeping original line.",
-                file=sys.stderr,
-            )
-            output_content.append(line)
+            if kind == "use":
+                print(
+                    f"  -> WARNING: '{included_filename}' not found on disk — treating as external reference",
+                    file=sys.stderr,
+                )
+                clean_line = line.strip()
+                if clean_line not in unique_library_includes:
+                    unique_library_includes.append(clean_line)
+            else:
+                print(
+                    f"  -> WARNING: '{included_filename}' not found on disk — keeping inline (include order matters)",
+                    file=sys.stderr,
+                )
+                output_content.append(line)
             continue
 
         if kind == "include":
