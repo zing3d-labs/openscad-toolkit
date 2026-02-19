@@ -668,7 +668,13 @@ def process_scad_file(
     return "".join(output_content)
 
 
-def compile_scad(input_file: str, library_prefixes: list[str] | None = None, output: str | None = None) -> str:
+def compile_scad(
+    input_file: str,
+    library_prefixes: list[str] | None = None,
+    output: str | None = None,
+    *,
+    deps_out: set[str] | None = None,
+) -> str:
     """Compile an OpenSCAD file by inlining all use/include dependencies.
 
     Args:
@@ -706,6 +712,9 @@ def compile_scad(input_file: str, library_prefixes: list[str] | None = None, out
 
     output_lines.append(result)
     final_output = "".join(output_lines)
+
+    if deps_out is not None:
+        deps_out.update(processed_files)
 
     if output:
         os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)

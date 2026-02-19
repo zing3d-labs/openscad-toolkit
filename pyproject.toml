@@ -31,6 +31,7 @@ Repository = "https://github.com/zing3d-labs/openscad-toolkit"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.4", "mypy>=1.10"]
+watch = ["watchdog>=4.0"]
 
 [tool.setuptools_scm]
 
