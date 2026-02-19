@@ -29,7 +29,7 @@ def watch_scad(input_file: str, library_prefixes: list[str] | None = None, outpu
 
     output_path = str(Path(output).resolve())
     watched_dirs: set[str] = set()
-    observer: Observer = Observer()
+    observer = Observer()
 
     def do_compile() -> set[str]:
         deps: set[str] = set()
@@ -45,11 +45,13 @@ def watch_scad(input_file: str, library_prefixes: list[str] | None = None, outpu
 
     class RecompileHandler(FileSystemEventHandler):
         def on_modified(self, event: FileSystemEvent) -> None:
-            if not event.is_directory and str(event.src_path).endswith(".scad") and not _is_output_file(str(event.src_path)):
+            path = str(event.src_path)
+            if not event.is_directory and path.endswith(".scad") and not _is_output_file(path):
                 _recompile()
 
         def on_created(self, event: FileSystemEvent) -> None:
-            if not event.is_directory and str(event.src_path).endswith(".scad") and not _is_output_file(str(event.src_path)):
+            path = str(event.src_path)
+            if not event.is_directory and path.endswith(".scad") and not _is_output_file(path):
                 _recompile()
 
     def _recompile() -> None:
