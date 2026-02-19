@@ -31,6 +31,7 @@ Repository = "https://github.com/zing3d-labs/openscad-toolkit"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "ruff>=0.4", "mypy>=1.10"]
+watch = ["watchdog>=4.0"]
 
 [tool.setuptools_scm]
 
@@ -48,3 +49,7 @@ select = ["E", "F", "I", "W"]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = "watchdog.*"
+ignore_missing_imports = true

@@ -136,12 +136,51 @@ scad-compiler my_model.scad -o compiled.scad
 scad-compiler my_model.scad -l BOSL2/ -l parts/ -o compiled.scad
 ```
 
+## Watch mode
+
+Add `--watch` to recompile automatically whenever any source file changes. Useful during active development — keep OpenSCAD's preview open alongside your editor and it will stay up to date.
+
+`--output` is required with `--watch` (stdout can't be watched).
+
+**With the alias / pip:**
+```bash
+scad-compiler my_model.scad -l BOSL2/ -o compiled.scad --watch
+```
+
+**Output at a different path** (e.g. directly into OpenSCAD's working folder):
+```bash
+scad-compiler my_model.scad -l BOSL2/ -o ~/Desktop/compiled.scad --watch
+```
+
+**Docker** (mount the folder containing your source files):
+```bash
+docker run --rm -it \
+  -v "$PWD":/work \
+  ghcr.io/zing3d-labs/openscad-toolkit:latest \
+  my_model.scad -l BOSL2/ -o compiled.scad --watch
+```
+
+If your source and output are in different directories, mount both:
+```bash
+docker run --rm -it \
+  -v "$PWD":/work \
+  -v /path/to/output:/out \
+  ghcr.io/zing3d-labs/openscad-toolkit:latest \
+  my_model.scad -l BOSL2/ -o /out/compiled.scad --watch
+```
+
+Watch mode requires the `watchdog` package. It is included in the Docker image. For pip installs:
+```bash
+pip install "git+https://github.com/zing3d-labs/openscad-toolkit[watch]"
+```
+
 ### Options
 
 | Flag | Description |
 |---|---|
 | `-o / --output FILE` | Write output to file (default: stdout) |
 | `-l / --library-prefix PREFIX` | Preserve includes matching this prefix as external references. Repeat for multiple. |
+| `--watch` | Watch source files and recompile on change (requires `-o`) |
 
 > **Note on `-l`:** preserving a library reference only works if the target platform has that library installed. MakerWorld is known to bundle BOSL2, so `-l BOSL2/` is safe when publishing there. For other libraries or platforms, omit `-l` to produce a fully self-contained file.
 

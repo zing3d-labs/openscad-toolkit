@@ -20,8 +20,19 @@ def main() -> None:
         help="Library prefixes to preserve (can be used multiple times)",
     )
     parser.add_argument("-o", "--output", help="Output file (default: stdout)")
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Watch source files for changes and recompile automatically (requires --output)",
+    )
 
     args = parser.parse_args()
+
+    if args.watch:
+        from scadtools.watch import watch_scad
+
+        watch_scad(args.input_file, args.library_prefix, args.output)
+        return
 
     try:
         result = compile_scad(args.input_file, args.library_prefix, args.output)

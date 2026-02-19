@@ -5,7 +5,7 @@ LABEL org.opencontainers.image.description="OpenSCAD compiler tools"
 LABEL org.opencontainers.image.licenses="CC-BY-NC-SA-4.0"
 
 COPY dist/*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/*.whl && rm /tmp/*.whl
+RUN pip install --no-cache-dir /tmp/*.whl watchdog && rm /tmp/*.whl
 
 WORKDIR /work
 ENTRYPOINT ["scad-compiler"]

@@ -368,3 +368,39 @@ def test_compile_variable_with_function_call():
     result = compile_scad(str(FIXTURES / "block_statement.scad"))
     assert "Width = max(10, 5);" in result
     assert "Height = min(20, 30);" in result
+
+
+# ---------------------------------------------------------------------------
+# compile_scad — deps_out
+# ---------------------------------------------------------------------------
+
+
+def test_compile_deps_out_entry_file():
+    """deps_out should contain the entry file itself."""
+    deps: set[str] = set()
+    compile_scad(str(FIXTURES / "simple.scad"), deps_out=deps)
+    assert any("simple.scad" in p for p in deps)
+
+
+def test_compile_deps_out_includes_transitive():
+    """deps_out should include all transitively referenced local files."""
+    deps: set[str] = set()
+    compile_scad(str(FIXTURES / "with_include.scad"), deps_out=deps)
+    basenames = {pathlib.Path(p).name for p in deps}
+    assert "with_include.scad" in basenames
+    assert "included_file.scad" in basenames
+
+
+def test_compile_deps_out_absolute_paths():
+    """All paths in deps_out must be absolute."""
+    deps: set[str] = set()
+    compile_scad(str(FIXTURES / "with_use.scad"), deps_out=deps)
+    assert deps, "deps_out should not be empty"
+    for p in deps:
+        assert pathlib.Path(p).is_absolute(), f"Expected absolute path, got: {p}"
+
+
+def test_compile_deps_out_not_modified_without_kwarg():
+    """Calling compile_scad without deps_out should not raise and return normally."""
+    result = compile_scad(str(FIXTURES / "simple.scad"))
+    assert "Width = 10;" in result
