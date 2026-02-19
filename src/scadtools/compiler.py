@@ -143,8 +143,7 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
             if not inside_assignment:
                 # Check if this line starts a variable assignment
                 if "=" in line and not any(
-                    keyword in line_without_comment
-                    for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
+                    keyword in line_without_comment for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
                 ):
                     # Extract variable name
                     var_match = VARIABLE_NAME_RE.match(line)
@@ -327,8 +326,7 @@ def extract_other_statements(lines: list[str]) -> list[str]:
         line_without_comment = line.split("//")[0]
         before_paren = line_without_comment.split("(")[0]
         if "=" in before_paren and not any(
-            keyword in line_without_comment
-            for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
+            keyword in line_without_comment for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
         ):
             # This looks like a variable assignment, skip it
             if not line_without_comment.rstrip().endswith(";"):
@@ -505,8 +503,7 @@ def process_scad_file(
                         unique_library_includes.append(clean_line)
                 else:
                     print(
-                        f"  -> WARNING: '{included_filename}' not found on disk"
-                        " — keeping inline (include order matters)",
+                        f"  -> WARNING: '{included_filename}' not found on disk — keeping inline (include order matters)",
                         file=sys.stderr,
                     )
                     output_content.append(inc_line)
