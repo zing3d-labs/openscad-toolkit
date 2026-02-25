@@ -535,7 +535,7 @@ def process_scad_file(
                     unique_library_includes,
                     True,
                     False,
-                    set(defined_variables),
+                    set(defined_variables) | _entry_var_names,
                 )
                 # Wrap use'd content in braces to prevent variables from appearing as
                 # customizable.  Buffer the block — it will be emitted after all
@@ -544,6 +544,19 @@ def process_scad_file(
                     use_blocks.append("{\n")
                     use_blocks.append(inlined_content)
                     use_blocks.append("}\n")
+
+        # Pre-scan the entry file's own variable names so that use'd files can
+        # suppress any variables that the entry file already defines.  This prevents
+        # OpenSCAD "was assigned … but was overwritten" warnings that occur when the
+        # same name appears both inside a { } scope and at the top level.
+        # Variables that the entry file does NOT define are kept in the use'd { } block
+        # so their default values remain available inside that scope.
+        _entry_var_names: set[str]
+        if is_entry_file:
+            _non_directive_lines = [ln for ln in lines if not INCLUDE_RE.match(ln)]
+            _, _entry_var_names = extract_top_level_items(_non_directive_lines)
+        else:
+            _entry_var_names = set()
 
         seg: list[str] = []
         for line in lines:

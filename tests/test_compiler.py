@@ -445,28 +445,22 @@ def test_compile_missing_include_warning(capsys):
 
 
 def test_compile_entry_var_not_shadowed_by_use():
-    """Entry file variables must appear at the top level even if the use'd file
-    defines a variable with the same name.  The use'd file's variable is inside
-    a { } scoping block and must not prevent the entry file's definition from
-    being emitted for the OpenSCAD Customizer."""
+    """Variables defined in use'd files must be suppressed when the entry file
+    defines the same name (avoids OpenSCAD 'overwritten' warnings), but kept
+    when only the use'd file defines them (their default is still useful inside
+    the { } scope).  Entry-file variables must appear before the { } block."""
     result = compile_scad(str(FIXTURES / "entry_overrides_use_var.scad"))
     # Entry file defines SharedVar = 5 — must appear at top level
     assert "SharedVar = 5;" in result
     # Entry-only variable must also be present
     assert "EntryOnly = 10;" in result
-    # The lib's version (SharedVar = 99) is inside { } and must still be there
-    assert "SharedVar = 99;" in result
-    # The lib's variable must be inside a scoping block, not at top level
-    lines = result.splitlines()
-    brace_depth = 0
-    found_lib_var_inside_braces = False
-    for line in lines:
-        brace_depth += line.count("{") - line.count("}")
-        if "SharedVar = 99" in line and brace_depth > 0:
-            found_lib_var_inside_braces = True
-    assert found_lib_var_inside_braces, "SharedVar = 99 from use'd file should be inside { } block"
-    # Entry file's top-level variable must appear BEFORE the use'd { } block so
-    # that the OpenSCAD Customizer sees it at the top of the file.
+    # use'd file's SharedVar = 99 must NOT appear — entry file already defines it
+    assert "SharedVar = 99;" not in result
+    # use'd file's LibOnlyVar = 7 must appear — entry file does not define it
+    assert "LibOnlyVar = 7;" in result
+    # Module from use'd file must still be present
+    assert "module libModule" in result
+    # Entry file's variables must appear before the use'd { } block
     pos_entry_var = result.index("SharedVar = 5;")
-    pos_lib_var = result.index("SharedVar = 99;")
-    assert pos_entry_var < pos_lib_var, "entry-file variable must precede the use'd { } block"
+    pos_module = result.index("module libModule")
+    assert pos_entry_var < pos_module, "entry-file variable must precede the use'd module block"

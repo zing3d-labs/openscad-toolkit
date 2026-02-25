@@ -1,6 +1,6 @@
-// use'd file that defines a variable also present in the entry file
+// use'd file that defines variables: one overlapping with the entry file, one unique
 SharedVar = 99;
-UniqueToLib = 7;
+LibOnlyVar = 7;
 
 module libModule(size) {
   cube(size);
