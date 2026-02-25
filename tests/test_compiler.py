@@ -442,3 +442,31 @@ def test_compile_missing_include_warning(capsys):
     compile_scad(str(FIXTURES / "with_missing_include.scad"))
     captured = capsys.readouterr()
     assert "not found on disk" in captured.err
+
+
+def test_compile_entry_var_not_shadowed_by_use():
+    """Entry file variables must appear at the top level even if the use'd file
+    defines a variable with the same name.  The use'd file's variable is inside
+    a { } scoping block and must not prevent the entry file's definition from
+    being emitted for the OpenSCAD Customizer."""
+    result = compile_scad(str(FIXTURES / "entry_overrides_use_var.scad"))
+    # Entry file defines SharedVar = 5 — must appear at top level
+    assert "SharedVar = 5;" in result
+    # Entry-only variable must also be present
+    assert "EntryOnly = 10;" in result
+    # The lib's version (SharedVar = 99) is inside { } and must still be there
+    assert "SharedVar = 99;" in result
+    # The lib's variable must be inside a scoping block, not at top level
+    lines = result.splitlines()
+    brace_depth = 0
+    found_lib_var_inside_braces = False
+    for line in lines:
+        brace_depth += line.count("{") - line.count("}")
+        if "SharedVar = 99" in line and brace_depth > 0:
+            found_lib_var_inside_braces = True
+    assert found_lib_var_inside_braces, "SharedVar = 99 from use'd file should be inside { } block"
+    # Entry file's top-level variable must appear BEFORE the use'd { } block so
+    # that the OpenSCAD Customizer sees it at the top of the file.
+    pos_entry_var = result.index("SharedVar = 5;")
+    pos_lib_var = result.index("SharedVar = 99;")
+    assert pos_entry_var < pos_lib_var, "entry-file variable must precede the use'd { } block"
