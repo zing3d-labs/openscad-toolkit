@@ -464,3 +464,25 @@ def test_compile_entry_var_not_shadowed_by_use():
     pos_entry_var = result.index("SharedVar = 5;")
     pos_module = result.index("module libModule")
     assert pos_entry_var < pos_module, "entry-file variable must precede the use'd module block"
+
+
+def test_compile_vector_with_if_conditions_preserved():
+    """A vector literal whose elements use `if` comprehension syntax must be
+    preserved verbatim.  Previously, lines like `if (cond) val,` inside a
+    multi-line assignment were misidentified as module call starts, corrupting
+    the output."""
+    result = compile_scad(str(FIXTURES / "vector_if.scad"))
+    assert "empty = [" in result
+    assert 'if (condition1) "content1",' in result
+    assert 'if (condition2) "content2",' in result
+    assert "];" in result
+    # The never_empty vector must also be intact
+    assert "never_empty = [" in result
+    assert '!condition1 ? "" : "content1",' in result
+
+
+def test_compile_special_variables_preserved():
+    """OpenSCAD special variables ($fn, $fs, $fa) start with $ and must not be
+    silently dropped by the variable-name regex."""
+    result = compile_scad(str(FIXTURES / "vector_if.scad"))
+    assert "$fn = 100;" in result
