@@ -476,6 +476,11 @@ def process_scad_file(
         # segment's variables before inlining the following include/use in-place.
         # This preserves dependency order: library variables defined by an `include`
         # are available to entry-file variables that appear after it in the source.
+        # use'd { } blocks are buffered here and emitted after all variables so
+        # that top-level variables appear before module definitions in the output,
+        # which is required for the OpenSCAD Customizer to recognise them.
+        use_blocks: list[str] = []
+
         def _inline_include(inc_line: str) -> None:
             match = INCLUDE_RE.match(inc_line)
             if not match:
@@ -530,13 +535,28 @@ def process_scad_file(
                     unique_library_includes,
                     True,
                     False,
-                    defined_variables,
+                    set(defined_variables) | _entry_var_names,
                 )
-                # Wrap use'd content in braces to prevent variables from appearing as customizable
+                # Wrap use'd content in braces to prevent variables from appearing as
+                # customizable.  Buffer the block — it will be emitted after all
+                # top-level variables so that the Customizer sees the variables first.
                 if inlined_content.strip():
-                    output_content.append("{\n")
-                    output_content.append(inlined_content)
-                    output_content.append("}\n")
+                    use_blocks.append("{\n")
+                    use_blocks.append(inlined_content)
+                    use_blocks.append("}\n")
+
+        # Pre-scan the entry file's own variable names so that use'd files can
+        # suppress any variables that the entry file already defines.  This prevents
+        # OpenSCAD "was assigned … but was overwritten" warnings that occur when the
+        # same name appears both inside a { } scope and at the top level.
+        # Variables that the entry file does NOT define are kept in the use'd { } block
+        # so their default values remain available inside that scope.
+        _entry_var_names: set[str]
+        if is_entry_file:
+            _non_directive_lines = [ln for ln in lines if not INCLUDE_RE.match(ln)]
+            _, _entry_var_names = extract_top_level_items(_non_directive_lines)
+        else:
+            _entry_var_names = set()
 
         seg: list[str] = []
         for line in lines:
@@ -556,6 +576,9 @@ def process_scad_file(
         output_content.extend(seg_items)
         if seg_items:
             output_content.append("\n")
+
+        # Emit buffered use'd { } blocks after all variables
+        output_content.extend(use_blocks)
 
         # For entry file, also extract other statements like module calls
         if is_entry_file:
@@ -596,7 +619,7 @@ def process_scad_file(
                         unique_library_includes,
                         True,
                         False,
-                        defined_variables,
+                        set(defined_variables),
                     )
                     # Wrap use'd content in braces to prevent variables from appearing as customizable
                     if inlined_content.strip():
@@ -670,7 +693,7 @@ def process_scad_file(
                 unique_library_includes,
                 True,
                 False,
-                defined_variables,
+                set(defined_variables),
             )
             # Wrap use'd content in braces to prevent variables from appearing as customizable
             if inlined_content.strip():

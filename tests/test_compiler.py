@@ -442,3 +442,25 @@ def test_compile_missing_include_warning(capsys):
     compile_scad(str(FIXTURES / "with_missing_include.scad"))
     captured = capsys.readouterr()
     assert "not found on disk" in captured.err
+
+
+def test_compile_entry_var_not_shadowed_by_use():
+    """Variables defined in use'd files must be suppressed when the entry file
+    defines the same name (avoids OpenSCAD 'overwritten' warnings), but kept
+    when only the use'd file defines them (their default is still useful inside
+    the { } scope).  Entry-file variables must appear before the { } block."""
+    result = compile_scad(str(FIXTURES / "entry_overrides_use_var.scad"))
+    # Entry file defines SharedVar = 5 — must appear at top level
+    assert "SharedVar = 5;" in result
+    # Entry-only variable must also be present
+    assert "EntryOnly = 10;" in result
+    # use'd file's SharedVar = 99 must NOT appear — entry file already defines it
+    assert "SharedVar = 99;" not in result
+    # use'd file's LibOnlyVar = 7 must appear — entry file does not define it
+    assert "LibOnlyVar = 7;" in result
+    # Module from use'd file must still be present
+    assert "module libModule" in result
+    # Entry file's variables must appear before the use'd { } block
+    pos_entry_var = result.index("SharedVar = 5;")
+    pos_module = result.index("module libModule")
+    assert pos_entry_var < pos_module, "entry-file variable must precede the use'd module block"
