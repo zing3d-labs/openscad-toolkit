@@ -9,7 +9,7 @@ INCLUDE_RE = re.compile(r"^\s*(use|include)\s*<\s*([^>]+)\s*>.*")
 MODULE_OR_FUNCTION_RE = re.compile(r"^\s*(module)\s+\w+.*\{")
 MODULE_START_RE = re.compile(r"^\s*(module)\s+\w+")
 FUNCTION_RE = re.compile(r"^\s*function\s+\w+.*=")
-VARIABLE_NAME_RE = re.compile(r"^\s*(\w+)\s*=")
+VARIABLE_NAME_RE = re.compile(r"^\s*(\$?\w+)\s*=")
 
 
 def extract_top_level_items(lines: list[str], defined_variables: set[str] | None = None) -> tuple[list[str], set[str]]:
@@ -129,18 +129,20 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
 
         # This is a top-level item (variable, constant, etc.)
         if not inside_module:
-            # Check if this starts a variable assignment
             # Remove comments from line for keyword checking
             line_without_comment = line.split("//")[0]
 
-            # Detect start of a module call — has '(' but is not a variable assignment
-            if "(" in line_without_comment and "=" not in line_without_comment.split("(")[0]:
-                if not line_without_comment.rstrip().endswith(";"):
-                    inside_call = True
-                i += 1
-                continue
-
             if not inside_assignment:
+                # Detect start of a module call — has '(' but is not a variable assignment.
+                # This check must be skipped when already collecting a multi-line assignment
+                # because continuation lines (e.g. `if (cond) val,` inside a vector literal)
+                # would otherwise be misidentified as module calls.
+                if "(" in line_without_comment and "=" not in line_without_comment.split("(")[0]:
+                    if not line_without_comment.rstrip().endswith(";"):
+                        inside_call = True
+                    i += 1
+                    continue
+
                 # Check if this line starts a variable assignment
                 if "=" in line and not any(
                     keyword in line_without_comment for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
@@ -175,9 +177,10 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
                                 current_var_name = None  # Don't collect lines for this
                                 assignment_lines = []
             else:
-                # We're inside a multi-line assignment
+                # We're inside a multi-line assignment — collect lines unconditionally.
+                # Do NOT run module-call or keyword detection here: continuation lines
+                # such as `if (cond) val,` inside a vector literal must be preserved.
                 if current_var_name and current_var_name not in defined_variables:
-                    # Continue collecting assignment lines for new variable
                     assignment_lines.append(line)
 
                 # Check if assignment is complete
