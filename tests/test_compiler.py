@@ -270,6 +270,63 @@ def test_emf_multiline_function():
     assert func_pos < data_pos < module_pos
 
 
+def test_emf_function_literal_single_line():
+    """A function literal (var = function(...) expr;) must be captured."""
+    lines = ["my_func = function(x) x * x;\n"]
+    output = extract_modules_and_functions(lines)
+    assert any("my_func" in line for line in output)
+
+
+def test_emf_function_literal_multiline():
+    """A multi-line function literal must be fully captured (not truncated)."""
+    lines = [
+        "selector = function(which)\n",
+        "  which == 1 ? function(x) x + x\n",
+        "             : function(x) x * x;\n",
+    ]
+    output = extract_modules_and_functions(lines)
+    joined = "".join(output)
+    assert "selector" in joined
+    assert "which == 1" in joined
+    assert "x * x;" in joined
+
+
+def test_emf_function_multiline_signature():
+    """A function with its `=` on a continuation line (multiline signature) must be fully captured."""
+    lines = [
+        "function compute(\n",
+        "  param1,\n",
+        "  param2\n",
+        ") = param1 + param2;\n",
+    ]
+    output = extract_modules_and_functions(lines)
+    joined = "".join(output)
+    assert "function compute" in joined
+    assert "param1 + param2;" in joined
+
+
+def test_eos_skips_function_literals():
+    """`extract_other_statements` must not emit function literals as statements."""
+    lines = ["my_func = function(x) x * x;\n", "foo();\n"]
+    output = extract_other_statements(lines)
+    assert not any("my_func" in line for line in output)
+    assert any("foo();" in line for line in output)
+
+
+def test_eos_skips_multiline_function_signature():
+    """`extract_other_statements` must skip a function with a multiline signature."""
+    lines = [
+        "function compute(\n",
+        "  param1,\n",
+        "  param2\n",
+        ") = param1 + param2;\n",
+        "foo();\n",
+    ]
+    output = extract_other_statements(lines)
+    assert not any("function compute" in line for line in output)
+    assert any("foo();" in line for line in output)
+
+
 def test_emf_multiline_module_signature():
     lines = [
         "module multilineBox(\n",

@@ -9,6 +9,8 @@ INCLUDE_RE = re.compile(r"^\s*(use|include)\s*<\s*([^>]+)\s*>.*")
 MODULE_OR_FUNCTION_RE = re.compile(r"^\s*(module)\s+\w+.*\{")
 MODULE_START_RE = re.compile(r"^\s*(module)\s+\w+")
 FUNCTION_RE = re.compile(r"^\s*function\s+\w+.*=")
+FUNCTION_START_RE = re.compile(r"^\s*function\s+\w+")  # matches any function start, incl. multiline signatures
+FUNCTION_LITERAL_RE = re.compile(r"^\s*\$?\w+\s*=\s*function\s*\(")  # matches var = function(...)
 VARIABLE_NAME_RE = re.compile(r"^\s*(\$?\w+)\s*=")
 
 
@@ -297,8 +299,14 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Skip function definitions
-        if FUNCTION_RE.match(line):
+        # Skip function definitions (named, multiline signature) and function literals
+        if FUNCTION_START_RE.match(line) or FUNCTION_LITERAL_RE.match(line):
+            if not line.split("//")[0].rstrip().endswith(";"):
+                i += 1
+                while i < len(lines):
+                    if lines[i].split("//")[0].rstrip().endswith(";"):
+                        break
+                    i += 1
             i += 1
             continue
 
@@ -387,12 +395,11 @@ def extract_modules_and_functions(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Check for function (may be multi-line: body continues until `;`)
-        if FUNCTION_RE.match(line):
+        # Check for any function definition: named (incl. multiline signature) or literal (var = function(...))
+        # All function forms are terminated by a semicolon, so collect until `;`.
+        if FUNCTION_START_RE.match(line) or FUNCTION_LITERAL_RE.match(line):
             output.append(line)
-            line_without_comment = line.split("//")[0]
-            if not line_without_comment.rstrip().endswith(";"):
-                # Body continues on subsequent lines — collect until the terminating `;`
+            if not line.split("//")[0].rstrip().endswith(";"):
                 i += 1
                 while i < len(lines):
                     cont_line = lines[i]
