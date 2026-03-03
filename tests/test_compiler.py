@@ -248,6 +248,28 @@ def test_emf_skips_top_level_vars():
     assert any("cube(Width)" in line for line in output)
 
 
+def test_emf_multiline_function():
+    """A function whose body spans multiple lines must be fully captured (issue #27)."""
+    lines = [
+        'function testfunc(data = "testfunc") =\n',
+        "  data;\n",
+        "\n",
+        "module testmodule() {\n",
+        '  echo("testmodule");\n',
+        "}\n",
+    ]
+    output = extract_modules_and_functions(lines)
+    joined = "".join(output)
+    assert "function testfunc" in joined
+    assert "data;" in joined
+    assert "module testmodule" in joined
+    # The module must not be fused into the function body
+    func_pos = joined.index("function testfunc")
+    data_pos = joined.index("data;")
+    module_pos = joined.index("module testmodule")
+    assert func_pos < data_pos < module_pos
+
+
 def test_emf_multiline_module_signature():
     lines = [
         "module multilineBox(\n",

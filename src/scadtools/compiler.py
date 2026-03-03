@@ -387,9 +387,19 @@ def extract_modules_and_functions(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Check for function (single line with =)
+        # Check for function (may be multi-line: body continues until `;`)
         if FUNCTION_RE.match(line):
             output.append(line)
+            line_without_comment = line.split("//")[0]
+            if not line_without_comment.rstrip().endswith(";"):
+                # Body continues on subsequent lines — collect until the terminating `;`
+                i += 1
+                while i < len(lines):
+                    cont_line = lines[i]
+                    output.append(cont_line)
+                    if cont_line.split("//")[0].rstrip().endswith(";"):
+                        break
+                    i += 1
             i += 1
             continue
 
