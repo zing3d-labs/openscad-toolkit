@@ -12,6 +12,7 @@ FUNCTION_RE = re.compile(r"^\s*function\s+\w+.*=")
 FUNCTION_START_RE = re.compile(r"^\s*function\s+\w+")  # matches any function start, incl. multiline signatures
 FUNCTION_LITERAL_RE = re.compile(r"^\s*\$?\w+\s*=\s*function\s*\(")  # matches var = function(...)
 VARIABLE_NAME_RE = re.compile(r"^\s*(\$?\w+)\s*=")
+SECTION_HEADER_RE = re.compile(r"/\*\s*\[[^\]]+\]\s*\*/")  # matches /* [Section Name] */
 
 
 def extract_top_level_items(lines: list[str], defined_variables: set[str] | None = None) -> tuple[list[str], set[str]]:
@@ -658,6 +659,10 @@ def process_scad_file(
     for line in lines:
         match = INCLUDE_RE.match(line)
         if not match:
+            # Rewrite customizer section headers from included files to [Hidden]
+            # so they don't create empty, confusing sections in the customizer UI.
+            if not is_entry_file:
+                line = SECTION_HEADER_RE.sub("/* [Hidden] */", line)
             output_content.append(line)
             continue
 
