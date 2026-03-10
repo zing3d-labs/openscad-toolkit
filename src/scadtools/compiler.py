@@ -12,6 +12,12 @@ FUNCTION_RE = re.compile(r"^\s*function\s+\w+.*=")
 FUNCTION_START_RE = re.compile(r"^\s*function\s+\w+")  # matches any function start, incl. multiline signatures
 FUNCTION_LITERAL_RE = re.compile(r"^\s*\$?\w+\s*=\s*function\s*\(")  # matches var = function(...)
 VARIABLE_NAME_RE = re.compile(r"^\s*(\$?\w+)\s*=")
+# Matches OpenSCAD statement keywords as whole words — used to avoid misclassifying
+# lines like `if (cond) ...` or `hull() ...` as variable assignments.
+# Simple `"keyword" in line` checks are intentionally NOT used here because they
+# produce false positives for variable names that contain a keyword as a substring
+# (e.g. `test_value_diff` contains "if", `hull_size` contains "hull").
+STATEMENT_KEYWORD_RE = re.compile(r"\b(module|function|linear_extrude|hull|union|if|for|let|each|intersection_for)\b")
 
 
 def extract_top_level_items(lines: list[str], defined_variables: set[str] | None = None) -> tuple[list[str], set[str]]:
@@ -146,9 +152,7 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
                     continue
 
                 # Check if this line starts a variable assignment
-                if "=" in line and not any(
-                    keyword in line_without_comment for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
-                ):
+                if "=" in line and not STATEMENT_KEYWORD_RE.search(line_without_comment):
                     # Extract variable name
                     var_match = VARIABLE_NAME_RE.match(line)
                     if var_match:
@@ -336,9 +340,7 @@ def extract_other_statements(lines: list[str]) -> list[str]:
         # incorrectly classified as variable assignments.
         line_without_comment = line.split("//")[0]
         before_paren = line_without_comment.split("(")[0]
-        if "=" in before_paren and not any(
-            keyword in line_without_comment for keyword in ["module", "function", "linear_extrude", "hull", "union", "if"]
-        ):
+        if "=" in before_paren and not STATEMENT_KEYWORD_RE.search(line_without_comment):
             # This looks like a variable assignment, skip it
             if not line_without_comment.rstrip().endswith(";"):
                 # Multi-line assignment, skip until we find the semicolon

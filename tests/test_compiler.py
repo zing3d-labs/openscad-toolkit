@@ -565,3 +565,59 @@ def test_compile_special_variables_preserved():
     silently dropped by the variable-name regex."""
     result = compile_scad(str(FIXTURES / "vector_if.scad"))
     assert "$fn = 100;" in result
+
+
+# ---------------------------------------------------------------------------
+# compile_scad — keyword-as-substring false positives (issue #30)
+#
+# Variable names that contain OpenSCAD keywords as substrings (e.g.
+# test_value_diff contains "if", hull_size contains "hull") were
+# misclassified by a simple `"keyword" in line` substring check in
+# extract_top_level_items and extract_other_statements.  This caused
+# them to be silently dropped from the customizer or emitted in the
+# wrong position.
+# ---------------------------------------------------------------------------
+
+
+def test_etli_variable_name_containing_keyword_as_substring():
+    """A variable whose name contains a keyword substring (e.g. 'diff' ⊃ 'if')
+    must be extracted normally from extract_top_level_items."""
+    lines = [
+        "test_value = 10;\n",
+        "test_value_diff = 20;\n",  # contains "if"
+        "hull_size = 5;\n",  # contains "hull"
+        "union_count = 3;\n",  # contains "union"
+    ]
+    output, vars_ = extract_top_level_items(lines)
+    assert "test_value" in vars_
+    assert "test_value_diff" in vars_
+    assert "hull_size" in vars_
+    assert "union_count" in vars_
+
+
+def test_eos_variable_name_containing_keyword_as_substring_skipped():
+    """`extract_other_statements` must skip assignments even when the variable
+    name contains a keyword as a substring."""
+    lines = [
+        "test_value_diff = 20;\n",  # contains "if"
+        "hull_size = 5;\n",  # contains "hull"
+        "foo();\n",
+    ]
+    output = extract_other_statements(lines)
+    assert not any("test_value_diff" in line for line in output)
+    assert not any("hull_size" in line for line in output)
+    assert any("foo();" in line for line in output)
+
+
+def test_compile_variable_with_keyword_substring_in_customizer(tmp_path):
+    """End-to-end: a variable whose name contains a keyword substring must
+    appear at the top level in the compiled output (in the customizer)."""
+    src = tmp_path / "model.scad"
+    src.write_text("test_value = 10;\ntest_value_diff = 20;\necho(test_value_diff);\n")
+    result = compile_scad(str(src))
+    # Both must appear before any module calls
+    assert "test_value = 10;" in result
+    assert "test_value_diff = 20;" in result
+    diff_pos = result.index("test_value_diff = 20;")
+    echo_pos = result.index("echo(test_value_diff);")
+    assert diff_pos < echo_pos
