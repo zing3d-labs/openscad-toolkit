@@ -18,6 +18,7 @@ VARIABLE_NAME_RE = re.compile(r"^\s*(\$?\w+)\s*=")
 # produce false positives for variable names that contain a keyword as a substring
 # (e.g. `test_value_diff` contains "if", `hull_size` contains "hull").
 STATEMENT_KEYWORD_RE = re.compile(r"\b(module|function|linear_extrude|hull|union|if|for|let|each|intersection_for)\b")
+SECTION_HEADER_RE = re.compile(r"/\*\s*\[[^\]]+\]\s*\*/")  # matches /* [Section Name] */
 
 
 def extract_top_level_items(lines: list[str], defined_variables: set[str] | None = None) -> tuple[list[str], set[str]]:
@@ -660,6 +661,10 @@ def process_scad_file(
     for line in lines:
         match = INCLUDE_RE.match(line)
         if not match:
+            # Rewrite customizer section headers from included files to [Hidden]
+            # so they don't create empty, confusing sections in the customizer UI.
+            if not is_entry_file:
+                line = SECTION_HEADER_RE.sub("/* [Hidden] */", line)
             output_content.append(line)
             continue
 

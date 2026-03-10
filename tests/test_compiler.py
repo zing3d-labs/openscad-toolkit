@@ -621,3 +621,33 @@ def test_compile_variable_with_keyword_substring_in_customizer(tmp_path):
     diff_pos = result.index("test_value_diff = 20;")
     echo_pos = result.index("echo(test_value_diff);")
     assert diff_pos < echo_pos
+
+
+# ---------------------------------------------------------------------------
+# compile_scad — section headers in included files (issue #31)
+# ---------------------------------------------------------------------------
+
+
+def test_compile_included_section_headers_become_hidden():
+    """Section headers from included files must be rewritten to /* [Hidden] */
+    so they don't create empty sections in the MakerWorld/OpenSCAD customizer."""
+    result = compile_scad(str(FIXTURES / "include_with_sections.scad"))
+    assert "/* [Library Settings] */" not in result
+    assert "/* [Library Advanced] */" not in result
+    # Both should have been replaced with [Hidden]
+    assert result.count("/* [Hidden] */") >= 2
+
+
+def test_compile_entry_file_section_headers_preserved():
+    """Section headers in the entry file itself must not be rewritten — the
+    user intentionally wants those sections visible in the customizer."""
+    result = compile_scad(str(FIXTURES / "include_with_sections.scad"))
+    assert "/* [My Settings] */" in result
+
+
+def test_compile_existing_hidden_section_not_duplicated():
+    """A /* [Hidden] */ section already in an included file must remain as-is
+    (not be rewritten to a second [Hidden])."""
+    result = compile_scad(str(FIXTURES / "customizer.scad"))
+    # customizer.scad is the entry file — its own [Hidden] section is preserved
+    assert "/* [Hidden] */" in result

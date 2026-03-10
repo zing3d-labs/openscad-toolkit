@@ -12,6 +12,7 @@ The compiler lets you structure your OpenSCAD projects across multiple files for
 - Deduplicates variables across files
 - Preserves library references (e.g. `BOSL2/`, `QuackWorks/`) as external `use`/`include` lines at the top of the output
 - Keeps OpenSCAD Customizer compatibility — section comments, parameter labels, and dropdown syntax are preserved
+- Rewrites `/* [Section] */` headers from `include`'d files to `/* [Hidden] */` so they don't create empty, confusing sections in the MakerWorld/OpenSCAD Customizer UI (your own entry-file headers are left untouched)
 
 ## Installation
 
