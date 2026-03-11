@@ -1,16 +1,13 @@
 name: Auto-tag
 
-# Fires on every merge to main. Bumps the minor version and pushes a tag,
+# Manually triggered to cut a release. Bumps the minor version and pushes a tag,
 # which triggers release.yml to build and publish.
 #
 # TODO: after v1.0.0, switch to PR-title-based versioning (conventional commits)
 # so that fix: → patch, feat: → minor, feat!: → major.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
+  workflow_dispatch:
 
 jobs:
   bump-minor:
