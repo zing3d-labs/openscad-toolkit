@@ -42,6 +42,30 @@ def test_etli_skips_module_internals():
     assert "inner" not in vars_
 
 
+def test_etli_skips_nested_module_body_vars():
+    """Variables inside a module that also contains a nested module must not leak to top level.
+
+    Regression test for: nested `module` declarations resetting brace tracking in
+    extract_top_level_items, causing the outer module's body to be treated as top-level code.
+    """
+    lines = [
+        "module outer(lite=false) {\n",
+        "  module inner(w) {\n",
+        "    x = w;\n",
+        "  }\n",
+        "  h = lite ? 1 : 2;\n",  # this must NOT appear at top level
+        "  core = 3;\n",
+        "}\n",
+        "top_var = 42;\n",
+    ]
+    output, vars_ = extract_top_level_items(lines)
+    joined = "".join(output)
+    assert "h = lite" not in joined, "nested module body variable leaked to top level"
+    assert "core = 3" not in joined, "nested module body variable leaked to top level"
+    assert "top_var" in joined
+    assert "top_var" in vars_
+
+
 def test_etli_deduplication():
     lines = ["x = 5;\n"]
     output, vars_ = extract_top_level_items(lines, defined_variables={"x"})
