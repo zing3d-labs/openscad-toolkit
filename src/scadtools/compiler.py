@@ -4,258 +4,186 @@ import os
 import re
 import sys
 
+from openscad_parser.ast import (
+    Assignment,
+    FunctionDeclaration,
+    IncludeStatement,
+    ModuleDeclaration,
+    UseStatement,
+    getASTfromString,
+)
+
 # Regular expression to find 'use <...>' or 'include <...>' statements.
 INCLUDE_RE = re.compile(r"^\s*(use|include)\s*<\s*([^>]+)\s*>.*")
-MODULE_OR_FUNCTION_RE = re.compile(r"^\s*(module)\s+\w+.*\{")
 MODULE_START_RE = re.compile(r"^\s*(module)\s+\w+")
-FUNCTION_RE = re.compile(r"^\s*function\s+\w+.*=")
 FUNCTION_START_RE = re.compile(r"^\s*function\s+\w+")  # matches any function start, incl. multiline signatures
 FUNCTION_LITERAL_RE = re.compile(r"^\s*\$?\w+\s*=\s*function\s*\(")  # matches var = function(...)
 VARIABLE_NAME_RE = re.compile(r"^\s*(\$?\w+)\s*=")
-# Matches OpenSCAD statement keywords as whole words — used to avoid misclassifying
-# lines like `if (cond) ...` or `hull() ...` as variable assignments.
-# Simple `"keyword" in line` checks are intentionally NOT used here because they
-# produce false positives for variable names that contain a keyword as a substring
-# (e.g. `test_value_diff` contains "if", `hull_size` contains "hull").
-STATEMENT_KEYWORD_RE = re.compile(r"\b(module|function|linear_extrude|hull|union|if|for|let|each|intersection_for)\b")
 SECTION_HEADER_RE = re.compile(r"/\*\s*\[[^\]]+\]\s*\*/")  # matches /* [Section Name] */
+
+# Node types that are NOT module calls / other statements to emit
+_SKIP_IN_OTHER_STATEMENTS = frozenset({ModuleDeclaration, FunctionDeclaration, Assignment, UseStatement, IncludeStatement})
+
+
+def _classify_top_level(lines: list[str]) -> dict[int, type]:
+    """Parse source and return {1-indexed line: AST node class} for top-level nodes.
+
+    Function literals (var = function(...)) cannot be parsed by openscad_parser,
+    so those lines are blanked before parsing and detected separately via
+    FUNCTION_LITERAL_RE where needed.
+
+    Returns an empty dict if parsing fails, which causes callers to fall back
+    gracefully (blank lines/comments are still preserved, constructs at unknown
+    lines are skipped rather than misclassified).
+    """
+    # Blank function-literal lines: the parser rejects `var = function(...)` syntax.
+    cleaned = "".join("\n" if FUNCTION_LITERAL_RE.match(ln) else ln for ln in lines)
+    try:
+        result = getASTfromString(cleaned)
+    except Exception as exc:
+        print(f"  -> WARNING: AST parse failed, structural analysis degraded: {exc}", file=sys.stderr)
+        return {}
+    if result is None:
+        return {}
+    nodes = result if isinstance(result, list) else [result]
+    return {node.position.line: type(node) for node in nodes}
 
 
 def extract_top_level_items(lines: list[str], defined_variables: set[str] | None = None) -> tuple[list[str], set[str]]:
-    """Extracts top-level variable assignments, constants, and other declarations.
+    """Extracts top-level variable assignments and other declarations.
     Returns (extracted_lines, variable_names)"""
-    output: list[str] = []
-    variable_names: set[str] = set()
     if defined_variables is None:
         defined_variables = set()
-    inside_module = False
-    brace_level = 0
-    scope_depth = 0  # Track non-module { } scoping blocks
+
+    # AST tells us exactly which lines are top-level Assignments — no brace-counting needed.
+    # Function literals appear as Assignment in source but are excluded here (they belong
+    # in extract_modules_and_functions instead).
+    classification = _classify_top_level(lines)
+    assignment_starts = {
+        ln for ln, cls in classification.items() if cls is Assignment and not FUNCTION_LITERAL_RE.match(lines[ln - 1])
+    }
+
+    output: list[str] = []
+    variable_names: set[str] = set()
     inside_assignment = False
     inside_block_comment = False
-    inside_call = False  # Track multi-line module calls to skip them
-    assignment_lines: list[str] = []
     current_var_name: str | None = None
+    assignment_lines: list[str] = []
 
-    i = 0
-    while i < len(lines):
-        line = lines[i]
+    for i, line in enumerate(lines):
+        line_num = i + 1
         stripped = line.strip()
 
-        # Track multi-line /* */ comments. These can span many lines
-        # (e.g. license headers) and all lines must be preserved or skipped
-        # as a unit to avoid leaving unterminated /* in the output.
+        # Block comment continuation
         if inside_block_comment:
-            if scope_depth == 0 and not inside_module:
-                output.append(line)
+            output.append(line)
             if "*/" in stripped:
                 inside_block_comment = False
-            i += 1
             continue
 
-        # Preserve top-level comments and blank lines (needed for OpenSCAD customizer
-        # labels, section headers like /* [Settings] */, and parameter descriptions)
-        if (
-            not inside_assignment
-            and not inside_module
-            and scope_depth == 0
-            and (not stripped or stripped.startswith("//") or stripped.startswith("/*"))
-        ):
+        # Multi-line assignment continuation
+        if inside_assignment:
+            if current_var_name:
+                assignment_lines.append(line)
+            if line.split("//")[0].rstrip().endswith(";"):
+                inside_assignment = False
+                if current_var_name and current_var_name not in defined_variables:
+                    output.extend(assignment_lines)
+                    variable_names.add(current_var_name)
+                assignment_lines = []
+                current_var_name = None
+            continue
+
+        # Blank lines and comment lines: preserve (needed for OpenSCAD Customizer labels,
+        # section headers like /* [Settings] */, and parameter descriptions).
+        if not stripped or stripped.startswith("//") or stripped.startswith("/*"):
             output.append(line)
             if stripped.startswith("/*") and "*/" not in stripped:
                 inside_block_comment = True
-            i += 1
             continue
 
-        # Skip include/use statements
-        if INCLUDE_RE.match(line):
-            i += 1
-            continue
-
-        # Check if we're entering a module definition (only at top level, not inside an existing module)
-        if not inside_module and MODULE_START_RE.match(line):
-            inside_module = True
-            brace_level = line.count("{") - line.count("}")
-
-            if brace_level == 0:
-                if "{" not in line:
-                    # No opening brace on this line yet (multiline signature); look ahead
-                    j = i + 1
-                    while j < len(lines) and "{" not in lines[j]:
-                        j += 1
-                    if j < len(lines):  # Found line with {
-                        brace_level = lines[j].count("{") - lines[j].count("}")
-                        i = j
-                else:
-                    # Single-line module: opens and closes on the same line
-                    inside_module = False
-
-            i += 1
-            continue
-
-        # Track braces when inside module (including nested module declarations)
-        if inside_module:
-            brace_level += line.count("{") - line.count("}")
-            if brace_level <= 0:
-                inside_module = False
-            i += 1
-            continue
-
-        # Track non-module scoping braces. OpenSCAD uses bare { } blocks to
-        # hide variables from the customizer UI. Variables inside these blocks
-        # must stay inside braces in the compiled output to preserve that behavior.
-        if not inside_module:
-            open_braces = line.count("{")
-            close_braces = line.count("}")
-            if open_braces or close_braces:
-                scope_depth += open_braces - close_braces
-                if scope_depth < 0:
-                    scope_depth = 0
-                # If this line is just a brace, skip it
-                if stripped == "{" or stripped == "}":
-                    i += 1
-                    continue
-
-        # Skip everything inside scoping braces (not top-level)
-        if scope_depth > 0:
-            i += 1
-            continue
-
-        # Skip function definitions (they'll be handled separately)
-        if FUNCTION_RE.match(line):
-            i += 1
-            continue
-
-        # Skip module calls (e.g. `dualSidedSnap(...)`) — these are handled
-        # by extract_other_statements, not here. Without this, the argument
-        # lines (like `Lite_A=Lite_A,`) would be misidentified as variable
-        # assignments because they contain `=`.
-        if inside_call:
-            if line.split("//")[0].rstrip().endswith(";"):
-                inside_call = False
-            i += 1
-            continue
-
-        # This is a top-level item (variable, constant, etc.)
-        if not inside_module:
-            # Remove comments from line for keyword checking
-            line_without_comment = line.split("//")[0]
-
-            if not inside_assignment:
-                # Detect start of a module call — has '(' but is not a variable assignment.
-                # This check must be skipped when already collecting a multi-line assignment
-                # because continuation lines (e.g. `if (cond) val,` inside a vector literal)
-                # would otherwise be misidentified as module calls.
-                if "(" in line_without_comment and "=" not in line_without_comment.split("(")[0]:
-                    if not line_without_comment.rstrip().endswith(";"):
-                        inside_call = True
-                    i += 1
-                    continue
-
-                # Check if this line starts a variable assignment
-                if "=" in line and not STATEMENT_KEYWORD_RE.search(line_without_comment):
-                    # Extract variable name
-                    var_match = VARIABLE_NAME_RE.match(line)
-                    if var_match:
-                        var_name = var_match.group(1)
+        # AST-confirmed top-level variable assignment
+        if line_num in assignment_starts:
+            var_match = VARIABLE_NAME_RE.match(line)
+            if var_match:
+                var_name = var_match.group(1)
+                line_without_comment = line.split("//")[0]
+                if var_name not in defined_variables:
+                    if line_without_comment.rstrip().endswith(";"):
+                        output.append(line)
+                        variable_names.add(var_name)
+                    else:
+                        inside_assignment = True
                         current_var_name = var_name
+                        assignment_lines = [line]
+                else:
+                    # Already defined — skip, but consume multi-line body
+                    if not line_without_comment.rstrip().endswith(";"):
+                        inside_assignment = True
+                        current_var_name = None
+                        assignment_lines = []
 
-                        # Only include if not already defined
-                        if var_name not in defined_variables:
-                            inside_assignment = True
-                            assignment_lines = [line]
-
-                            # Check if assignment is complete on this line.
-                            # Must strip trailing comments first — OpenSCAD customizer
-                            # dropdown syntax like `Grid_Version = "Lite"; // [Full,Lite]`
-                            # would otherwise hide the semicolon and start a false
-                            # multi-line assignment.
-                            if line_without_comment.rstrip().endswith(";"):
-                                inside_assignment = False
-                                output.extend(assignment_lines)
-                                variable_names.add(var_name)
-                                assignment_lines = []
-                                current_var_name = None
-                        else:
-                            # Skip this assignment - already defined
-                            # We still need to track if it's multi-line to skip all of it
-                            if not line_without_comment.rstrip().endswith(";"):
-                                inside_assignment = True
-                                current_var_name = None  # Don't collect lines for this
-                                assignment_lines = []
-            else:
-                # We're inside a multi-line assignment — collect lines unconditionally.
-                # Do NOT run module-call or keyword detection here: continuation lines
-                # such as `if (cond) val,` inside a vector literal must be preserved.
-                if current_var_name and current_var_name not in defined_variables:
-                    assignment_lines.append(line)
-
-                # Check if assignment is complete
-                if line.split("//")[0].rstrip().endswith(";"):
-                    inside_assignment = False
-                    if current_var_name and current_var_name not in defined_variables:
-                        output.extend(assignment_lines)
-                        variable_names.add(current_var_name)
-                    assignment_lines = []
-                    current_var_name = None
-
-        i += 1
+        # All other lines (modules, functions, calls, use/include): skip
 
     return output, variable_names
 
 
 def extract_other_statements(lines: list[str]) -> list[str]:
-    """Extracts statements that are not variables, modules, or functions - like module calls
+    """Extracts statements that are not variables, modules, or functions — like module calls
     and scoping blocks ({ } containing variables and calls hidden from customizer)."""
+    classification = _classify_top_level(lines)
+
+    # Everything not in the skip set is a module call or control structure to emit.
+    call_starts = {ln for ln, cls in classification.items() if cls not in _SKIP_IN_OTHER_STATEMENTS}
+
+    # Bare { } scoping blocks (OpenSCAD trick to hide vars from Customizer) don't appear
+    # as typed AST nodes — detect them directly from source content.
+    scope_line_starts = {i + 1 for i, ln in enumerate(lines) if ln.strip() == "{"}
+
     output: list[str] = []
-    inside_module = False
-    brace_level = 0
-    scope_depth = 0  # Track non-module { } scoping blocks
-    scope_lines: list[str] = []  # Collect lines inside scoping blocks
-    inside_assignment = False
     inside_block_comment = False
     inside_statement = False
     statement_lines: list[str] = []
     statement_brace_depth = 0
-    i = 0
+    inside_scope = False
+    scope_depth = 0
+    scope_buf: list[str] = []
 
+    i = 0
     while i < len(lines):
         line = lines[i]
+        line_num = i + 1
         stripped = line.strip()
 
-        # Track multi-line /* */ comments (e.g. license headers).
-        # All lines must be consumed as a unit to avoid unterminated /* in output.
         if inside_block_comment:
-            if scope_depth > 0:
-                scope_lines.append(line)
+            if inside_scope:
+                scope_buf.append(line)
             if "*/" in stripped:
                 inside_block_comment = False
             i += 1
             continue
 
-        # If inside a scoping block (bare { } used to hide vars from customizer),
-        # collect all lines verbatim until the block closes, then emit them.
-        if scope_depth > 0:
+        # Collecting a bare scoping block verbatim
+        if inside_scope:
             scope_depth += line.count("{") - line.count("}")
-            scope_lines.append(line)
+            scope_buf.append(line)
             if stripped.startswith("/*") and "*/" not in stripped:
                 inside_block_comment = True
             if scope_depth <= 0:
-                # Block closed, emit all collected lines
-                output.extend(scope_lines)
-                scope_lines = []
-                scope_depth = 0
+                output.extend(scope_buf)
+                scope_buf = []
+                inside_scope = False
             i += 1
             continue
 
-        # If we're collecting a multi-line statement (e.g. module call), keep going
+        # Collecting a multi-line module call
         if inside_statement:
             statement_lines.append(line)
             statement_brace_depth += line.count("{") - line.count("}")
-            is_done = (statement_brace_depth <= 0 and stripped.endswith(";")) or (
+            done = (statement_brace_depth <= 0 and stripped.endswith(";")) or (
                 statement_brace_depth == 0 and stripped.endswith("}")
             )
-            if is_done:
+            if done:
                 inside_statement = False
                 output.extend(statement_lines)
                 statement_lines = []
@@ -263,100 +191,22 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith("//") or stripped.startswith("/*"):
-            if stripped.startswith("/*") and "*/" not in stripped:
-                inside_block_comment = True
-            i += 1
-            continue
-
-        # Skip include/use statements
-        if INCLUDE_RE.match(line):
-            i += 1
-            continue
-
-        # Check if we're entering a module definition (only at top level, not inside an existing module)
-        if not inside_module and MODULE_START_RE.match(line):
-            inside_module = True
-            brace_level = line.count("{") - line.count("}")
-
-            if brace_level == 0:
-                if "{" not in line:
-                    # No opening brace on this line yet (multiline signature); look ahead
-                    j = i + 1
-                    while j < len(lines) and "{" not in lines[j]:
-                        j += 1
-                    if j < len(lines):  # Found line with {
-                        brace_level = lines[j].count("{") - lines[j].count("}")
-                        i = j
-                else:
-                    # Single-line module: opens and closes on the same line
-                    inside_module = False
-
-            i += 1
-            continue
-
-        # Track braces when inside module definition (including nested module declarations)
-        if inside_module:
-            brace_level += line.count("{") - line.count("}")
-            if brace_level <= 0:
-                inside_module = False
-            i += 1
-            continue
-
-        # Skip function definitions (named, multiline signature) and function literals
-        if FUNCTION_START_RE.match(line) or FUNCTION_LITERAL_RE.match(line):
-            if not line.split("//")[0].rstrip().endswith(";"):
-                i += 1
-                while i < len(lines):
-                    if lines[i].split("//")[0].rstrip().endswith(";"):
-                        break
-                    i += 1
-            i += 1
-            continue
-
-        # Detect scoping blocks — OpenSCAD uses bare { } blocks to hide
-        # variables from the customizer UI. Collect the entire block and
-        # emit it verbatim so the scoping is preserved in compiled output.
-        if stripped == "{":
+        # Bare scoping block
+        if line_num in scope_line_starts:
+            inside_scope = True
             scope_depth = 1
-            scope_lines = [line]
+            scope_buf = [line]
             i += 1
             continue
 
-        # If we are inside a multi-line variable assignment, keep consuming
-        # lines until the terminating semicolon. This check must come before
-        # the variable-assignment detection block so that continuation lines
-        # (which may themselves contain '=') are not re-classified as new
-        # variable assignments.
-        if inside_assignment:
+        # AST-confirmed module call or control structure
+        if line_num in call_starts:
             if stripped.endswith(";"):
-                inside_assignment = False
-            i += 1
-            continue
-
-        # Skip variable assignments at top level.
-        # Only treat as an assignment when '=' appears before any '(' so that
-        # module calls containing '==' (e.g. `down(x == y) diff()`) are not
-        # incorrectly classified as variable assignments.
-        line_without_comment = line.split("//")[0]
-        before_paren = line_without_comment.split("(")[0]
-        if "=" in before_paren and not STATEMENT_KEYWORD_RE.search(line_without_comment):
-            # This looks like a variable assignment, skip it
-            if not line_without_comment.rstrip().endswith(";"):
-                # Multi-line assignment, skip until we find the semicolon
-                inside_assignment = True
-            i += 1
-            continue
-
-        # This is some other statement (like a module call) - preserve it
-        if not inside_module:
-            if not stripped.endswith(";"):
+                output.append(line)
+            else:
                 inside_statement = True
                 statement_lines = [line]
                 statement_brace_depth = line.count("{") - line.count("}")
-            else:
-                output.append(line)
 
         i += 1
 
@@ -366,18 +216,26 @@ def extract_other_statements(lines: list[str]) -> list[str]:
 def extract_modules_and_functions(lines: list[str]) -> list[str]:
     """Extracts only module and function bodies from a list of lines,
     excluding top-level variables and module calls."""
+    classification = _classify_top_level(lines)
+
+    module_starts = {ln for ln, cls in classification.items() if cls is ModuleDeclaration}
+    function_starts = {ln for ln, cls in classification.items() if cls is FunctionDeclaration}
+    # Function literals (var = function(...)) are blanked before AST parsing so they don't
+    # appear in classification — detect them directly from source lines.
+    function_literal_starts = {i + 1 for i, ln in enumerate(lines) if FUNCTION_LITERAL_RE.match(ln)}
+
     output: list[str] = []
     inside_module = False
+    brace_depth = 0
     inside_block_comment = False
-    brace_level = 0
-    i = 0
 
+    i = 0
     while i < len(lines):
         line = lines[i]
+        line_num = i + 1
         stripped = line.strip()
 
-        # Track multi-line /* */ comments (e.g. license headers).
-        # All lines must be consumed as a unit to avoid unterminated /* in output.
+        # Block comment tracking (needed for correct brace counting inside modules)
         if inside_block_comment:
             if inside_module:
                 output.append(line)
@@ -393,69 +251,51 @@ def extract_modules_and_functions(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Skip single-line comments when not inside a module
-        if not inside_module and (stripped.startswith("//") or (stripped.startswith("/*") and "*/" in stripped)):
+        # Collecting a module body — emit all lines until braces balance
+        if inside_module:
+            output.append(line)
+            brace_depth += line.count("{") - line.count("}")
+            if brace_depth <= 0:
+                inside_module = False
             i += 1
             continue
 
-        # Check for any function definition: named (incl. multiline signature) or literal (var = function(...))
-        # All function forms are terminated by a semicolon, so collect until `;`.
-        if FUNCTION_START_RE.match(line) or FUNCTION_LITERAL_RE.match(line):
+        # AST-confirmed top-level module definition
+        if line_num in module_starts:
+            inside_module = True
+            output.append(line)
+            brace_depth = line.count("{") - line.count("}")
+
+            # Handle multiline module signature (opening brace on a later line)
+            if brace_depth == 0 and "{" not in line:
+                j = i + 1
+                while j < len(lines) and "{" not in lines[j]:
+                    output.append(lines[j])
+                    j += 1
+                if j < len(lines):
+                    output.append(lines[j])
+                    brace_depth = lines[j].count("{") - lines[j].count("}")
+                    i = j
+
+            if brace_depth <= 0:
+                inside_module = False
+            i += 1
+            continue
+
+        # AST-confirmed top-level function (terminated by semicolon)
+        if line_num in function_starts or line_num in function_literal_starts:
             output.append(line)
             if not line.split("//")[0].rstrip().endswith(";"):
                 i += 1
                 while i < len(lines):
-                    cont_line = lines[i]
-                    output.append(cont_line)
-                    if cont_line.split("//")[0].rstrip().endswith(";"):
+                    output.append(lines[i])
+                    if lines[i].split("//")[0].rstrip().endswith(";"):
                         break
                     i += 1
             i += 1
             continue
 
-        # Check start of module
-        if MODULE_START_RE.match(line):
-            if not inside_module:
-                # This is a top-level module
-                inside_module = True
-                output.append(line)
-                brace_level = line.count("{") - line.count("}")
-
-                # If no opening brace on this line, look ahead for it
-                if brace_level == 0:
-                    j = i + 1
-                    while j < len(lines) and "{" not in lines[j]:
-                        output.append(lines[j])
-                        j += 1
-                    if j < len(lines):  # Found line with {
-                        output.append(lines[j])
-                        brace_level = lines[j].count("{") - lines[j].count("}")
-                        i = j
-                    else:
-                        # No opening brace found, treat as single line
-                        inside_module = False
-
-                # Only exit module if we have a complete brace pair (net 0) or negative
-                if brace_level < 0:
-                    inside_module = False
-            else:
-                # This is a nested module, treat as regular content
-                output.append(line)
-                brace_level += line.count("{") - line.count("}")
-                if brace_level <= 0:
-                    inside_module = False
-            i += 1
-            continue
-
-        if inside_module:
-            output.append(line)
-            brace_level += line.count("{") - line.count("}")
-            # Close when brace level returns to zero or below
-            if brace_level <= 0:
-                inside_module = False
-
-        i += 1
-        # Skip all code not inside a module or function (top-level variables, module calls, etc.)
+        i += 1  # Skip everything else (variables, calls, use/include, comments)
 
     return output
 
@@ -569,11 +409,7 @@ def process_scad_file(
                     use_blocks.append("}\n")
 
         # Pre-scan the entry file's own variable names so that use'd files can
-        # suppress any variables that the entry file already defines.  This prevents
-        # OpenSCAD "was assigned … but was overwritten" warnings that occur when the
-        # same name appears both inside a { } scope and at the top level.
-        # Variables that the entry file does NOT define are kept in the use'd { } block
-        # so their default values remain available inside that scope.
+        # suppress any variables that the entry file already defines.
         _entry_var_names: set[str]
         if is_entry_file:
             _non_directive_lines = [ln for ln in lines if not INCLUDE_RE.match(ln)]
@@ -608,8 +444,6 @@ def process_scad_file(
             other_statements = extract_other_statements(lines)
             for item in other_statements:
                 output_content.append(item)
-
-            # Add a separator if we found other statements
             if other_statements:
                 output_content.append("\n")
 
@@ -644,7 +478,6 @@ def process_scad_file(
                         False,
                         set(defined_variables),
                     )
-                    # Wrap use'd content in braces to prevent variables from appearing as customizable
                     if inlined_content.strip():
                         output_content.append("{\n")
                         output_content.append(inlined_content)
@@ -652,7 +485,6 @@ def process_scad_file(
             else:
                 output_content.append(line)
 
-        # Only add end marker for non-entry files (they'll be inside braces)
         if not is_entry_file:
             output_content.append(f"// --- End Content of {os.path.basename(filepath)} ---\n\n")
         return "".join(output_content)
@@ -661,8 +493,6 @@ def process_scad_file(
     for line in lines:
         match = INCLUDE_RE.match(line)
         if not match:
-            # Rewrite customizer section headers from included files to [Hidden]
-            # so they don't create empty, confusing sections in the customizer UI.
             if not is_entry_file:
                 line = SECTION_HEADER_RE.sub("/* [Hidden] */", line)
             output_content.append(line)
@@ -722,13 +552,11 @@ def process_scad_file(
                 False,
                 set(defined_variables),
             )
-            # Wrap use'd content in braces to prevent variables from appearing as customizable
             if inlined_content.strip():
                 output_content.append("{\n")
                 output_content.append(inlined_content)
                 output_content.append("}\n")
 
-    # Only add end marker for non-entry files (they'll be inside braces)
     if not is_entry_file:
         output_content.append(f"// --- End Content of {os.path.basename(filepath)} ---\n\n")
     return "".join(output_content)
