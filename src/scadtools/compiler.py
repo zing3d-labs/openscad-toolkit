@@ -72,8 +72,8 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
             i += 1
             continue
 
-        # Check if we're entering a module definition
-        if MODULE_START_RE.match(line):
+        # Check if we're entering a module definition (only at top level, not inside an existing module)
+        if not inside_module and MODULE_START_RE.match(line):
             inside_module = True
             brace_level = line.count("{") - line.count("}")
 
@@ -93,7 +93,7 @@ def extract_top_level_items(lines: list[str], defined_variables: set[str] | None
             i += 1
             continue
 
-        # Track braces when inside module
+        # Track braces when inside module (including nested module declarations)
         if inside_module:
             brace_level += line.count("{") - line.count("}")
             if brace_level <= 0:
@@ -275,8 +275,8 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Check if we're entering a module definition
-        if MODULE_START_RE.match(line):
+        # Check if we're entering a module definition (only at top level, not inside an existing module)
+        if not inside_module and MODULE_START_RE.match(line):
             inside_module = True
             brace_level = line.count("{") - line.count("}")
 
@@ -296,7 +296,7 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Track braces when inside module definition
+        # Track braces when inside module definition (including nested module declarations)
         if inside_module:
             brace_level += line.count("{") - line.count("}")
             if brace_level <= 0:
