@@ -422,6 +422,8 @@ def process_scad_file(
             if INCLUDE_RE.match(line):
                 # Emit variables accumulated in this segment, then inline the include
                 seg_items, new_vars = extract_top_level_items(seg, defined_variables)
+                if not is_entry_file:
+                    seg_items = [SECTION_HEADER_RE.sub("/* [Hidden] */", ln) for ln in seg_items]
                 defined_variables.update(new_vars)
                 output_content.extend(seg_items)
                 seg = []
@@ -431,6 +433,8 @@ def process_scad_file(
 
         # Emit variables from the final segment (after the last include)
         seg_items, new_vars = extract_top_level_items(seg, defined_variables)
+        if not is_entry_file:
+            seg_items = [SECTION_HEADER_RE.sub("/* [Hidden] */", ln) for ln in seg_items]
         defined_variables.update(new_vars)
         output_content.extend(seg_items)
         if seg_items:

@@ -675,3 +675,18 @@ def test_compile_existing_hidden_section_not_duplicated():
     result = compile_scad(str(FIXTURES / "customizer.scad"))
     # customizer.scad is the entry file — its own [Hidden] section is preserved
     assert "/* [Hidden] */" in result
+
+
+def test_compile_used_section_headers_become_hidden():
+    """Section headers from use'd files must be rewritten to /* [Hidden] */
+    so they don't create empty sections in the MakerWorld/OpenSCAD customizer.
+
+    Regression test: the only_modules_functions path in process_scad_file was not
+    applying SECTION_HEADER_RE substitution to seg_items from extract_top_level_items.
+    """
+    result = compile_scad(str(FIXTURES / "entry_with_use_sections.scad"))
+    # Section headers from used_with_sections.scad must be hidden
+    assert "/* [Required Dimensions] */" not in result
+    assert "/* [Advanced Options] */" not in result
+    # Entry file's own section header must be preserved
+    assert "/* [My Settings] */" in result
