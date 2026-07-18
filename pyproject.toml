@@ -9,7 +9,11 @@ description = "OpenSCAD compiler and build tools"
 readme = "README.md"
 license = "CC-BY-NC-SA-4.0"
 requires-python = ">=3.11"
-dependencies = ["openscad_parser>=1.0.0"]
+# openscad_parser 2.x's grammar silently truncates AST output partway through
+# files containing a bare top-level { } scoping block, dropping any module/
+# function definitions that follow -- pinned below 2.0 until that's fixed
+# upstream (belfryscad/openscad_parser).
+dependencies = ["openscad_parser>=1.0.0,<2.0.0"]
 authors = [
     { name = "Jonathan Huizingh" }
 ]

@@ -389,6 +389,15 @@ def test_compile_use_inlines_module():
     assert "usedHelper(Size)" in result
 
 
+def test_compile_use_inlines_module_nested_in_bare_block():
+    """A module def wrapped in a bare { } block (used to hide a helper
+    variable from the Customizer) must still be found and inlined when the
+    containing file is `use`'d, not just when it's the entry file."""
+    result = compile_scad(str(FIXTURES / "with_use_block_wrapped_module.scad"))
+    assert "module usedHelper" in result
+    assert "usedHelper(Size)" in result
+
+
 def test_compile_include_inlines_all():
     result = compile_scad(str(FIXTURES / "with_include.scad"))
     assert "includedVar = 100" in result
