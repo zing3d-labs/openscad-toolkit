@@ -187,6 +187,12 @@ Top-level module calls from `use`'d files are discarded (only module/function de
 
 Top-level module calls from `include`'d files are inlined verbatim.
 
+### Top-level control structures
+
+A top-level `if` / `else if` / `else` chain in the entry file is preserved whole, including branches whose body is a `{ }` block and chains whose `else` is separated from the preceding branch by blank lines or comments. Top-level `for` and `intersection_for` are preserved the same way.
+
+This matters for a model whose entry point dispatches on a Customizer parameter (`Render_Plate = 0` for the assembly, `1..N` for a plate) — dropping a branch would compile to a file permanently stuck on the first one.
+
 ### Scoping blocks
 
 OpenSCAD allows bare `{ }` blocks at the top level to hide variables from the Customizer. The compiler preserves these blocks verbatim in the output, including all their contents.

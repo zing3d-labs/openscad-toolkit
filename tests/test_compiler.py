@@ -699,3 +699,137 @@ def test_compile_used_section_headers_become_hidden():
     assert "/* [Advanced Options] */" not in result
     # Entry file's own section header must be preserved
     assert "/* [My Settings] */" in result
+
+
+# ---------------------------------------------------------------------------
+# Top-level if / else if / else chains (zing-9nf)
+#
+# Before fix: only the first branch of a top-level if chain reached the output.
+# Continuation lines starting with `else` matched no AST node and no source
+# rule, so they were silently dropped — a compiled model whose entry point
+# dispatches on a parameter was permanently stuck on the first branch.
+#
+# A brace-bodied `if`/`for` was worse: openscad_parser emits no node at all for
+# those, so the whole statement disappeared.
+#
+# Fix: continue a buffered statement across an `else` (skipping intervening
+# blank lines and comments), and detect brace-bodied control structures from
+# source for the lines the AST cannot classify.
+# ---------------------------------------------------------------------------
+
+
+def test_eos_else_if_chain_preserved():
+    """Every branch of a top-level if / else if / else chain must be emitted."""
+    lines = [
+        "if (Sel == 0) a();\n",
+        "else if (Sel == 1) b();\n",
+        'else echo("none");\n',
+    ]
+    output = extract_other_statements(lines)
+    assert output == lines
+
+
+def test_eos_else_chain_with_brace_bodies_preserved():
+    """The brace-bodied form of the chain must survive too, and stop at its end."""
+    lines = [
+        "if (P == 0) {\n",
+        "  assembly();\n",
+        "} else if (P == 1) {\n",
+        "  plate1();\n",
+        "} else {\n",
+        '  echo("none");\n',
+        "}\n",
+        "footer();\n",
+    ]
+    output = extract_other_statements(lines)
+    assert output == lines  # chain plus the following call, nothing dropped
+
+
+def test_eos_else_on_its_own_line_preserved():
+    """An `else` split onto its own line must still continue the statement."""
+    lines = ["if (x)\n", "  a();\n", "else\n", "  b();\n"]
+    output = extract_other_statements(lines)
+    assert output == lines
+
+
+def test_eos_else_after_comment_preserved():
+    """Comments between a branch and its `else` must not break the chain."""
+    lines = [
+        "if (x) a();\n",
+        "// pick the other one\n",
+        "/* still\n",
+        "   deciding */\n",
+        "else b();\n",
+    ]
+    output = extract_other_statements(lines)
+    assert output == lines
+
+
+def test_eos_else_inside_comment_does_not_extend_statement():
+    """The word `else` inside a comment must not glue the next statement on."""
+    lines = ["if (x) a();\n", "/* else fake */\n", "c();\n"]
+    output = extract_other_statements(lines)
+    joined = "".join(output)
+    assert "if (x) a();" in joined
+    assert "c();" in joined
+    assert "else fake" not in joined  # the comment is not part of either statement
+
+
+def test_eos_brace_bodied_if_not_dropped():
+    """A brace-bodied top-level `if` produces no AST node — it must still be emitted."""
+    lines = ["if (x) { a(); }\n", "c();\n"]
+    output = extract_other_statements(lines)
+    assert output == lines
+
+
+def test_eos_brace_bodied_for_not_dropped():
+    """Same for a brace-bodied top-level `for`."""
+    lines = ["for (i = [0:3]) { a(i); }\n", "c();\n"]
+    output = extract_other_statements(lines)
+    assert output == lines
+
+
+def test_eos_comprehension_if_not_emitted_as_statement():
+    """`if` inside a list comprehension belongs to the assignment, not to statements."""
+    lines = [
+        "empty = [\n",
+        '  if (c1) "a",\n',
+        '  if (c2) "b",\n',
+        "];\n",
+        "if (len(empty) == 0)\n",
+        '  echo("e");\n',
+    ]
+    output = extract_other_statements(lines)
+    assert output == lines[4:]  # only the real top-level if, not the comprehension lines
+
+
+def test_compile_top_level_if_else_chain_preserved(tmp_path):
+    """End-to-end: the chain from the bug report must survive compilation intact."""
+    src = tmp_path / "elif2.scad"
+    src.write_text(
+        "Sel = 0;\n"
+        "module a() { cube(1); }\n"
+        "module b() { cube(2); }\n"
+        "if (Sel == 0) a();\n"
+        "else if (Sel == 1) b();\n"
+        'else echo("none");\n'
+    )
+    result = compile_scad(str(src))
+    assert "if (Sel == 0) a();" in result
+    assert "else if (Sel == 1) b();" in result
+    assert 'else echo("none");' in result
+    # The chain must stay contiguous, or OpenSCAD will reject the orphaned `else`
+    first = result.index("if (Sel == 0) a();")
+    assert result[first:].startswith('if (Sel == 0) a();\nelse if (Sel == 1) b();\nelse echo("none");')
+
+
+def test_compile_top_level_if_else_chain_with_use(tmp_path):
+    """The chain must survive when the entry file also `use`s a library."""
+    (tmp_path / "lib.scad").write_text("module a() { cube(1); }\nmodule b() { cube(2); }\n")
+    src = tmp_path / "entry.scad"
+    src.write_text('Sel = 0;\nuse <lib.scad>\nif (Sel == 0) a();\nelse if (Sel == 1) b();\nelse echo("none");\n')
+    result = compile_scad(str(src))
+    assert "else if (Sel == 1) b();" in result
+    assert 'else echo("none");' in result
+    # Variables still lead so the Customizer picks them up
+    assert result.index("Sel = 0;") < result.index("if (Sel == 0) a();")

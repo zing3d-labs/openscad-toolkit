@@ -20,6 +20,10 @@ FUNCTION_START_RE = re.compile(r"^\s*function\s+\w+")  # matches any function st
 FUNCTION_LITERAL_RE = re.compile(r"^\s*\$?\w+\s*=\s*function\s*\(")  # matches var = function(...)
 VARIABLE_NAME_RE = re.compile(r"^\s*(\$?\w+)\s*=")
 SECTION_HEADER_RE = re.compile(r"/\*\s*\[[^\]]+\]\s*\*/")  # matches /* [Section Name] */
+# openscad_parser emits no AST node at all for a brace-bodied `if`/`for` at top level, so
+# those statements have to be recognised from source instead.
+CONTROL_START_RE = re.compile(r"^\s*(?:if|for|intersection_for)\s*\(")
+ELSE_START_RE = re.compile(r"^\s*else\b")  # continuation of the preceding if statement
 
 # Node types that are NOT module calls / other statements to emit
 _SKIP_IN_OTHER_STATEMENTS = frozenset({ModuleDeclaration, FunctionDeclaration, Assignment, UseStatement, IncludeStatement})
@@ -47,6 +51,157 @@ def _classify_top_level(lines: list[str]) -> dict[int, type]:
         return {}
     nodes = result if isinstance(result, list) else [result]
     return {node.position.line: type(node) for node in nodes}
+
+
+def _declaration_spans(lines: list[str], classification: dict[int, type]) -> list[tuple[int, int]]:
+    """Return 1-indexed inclusive line ranges occupied by top-level module/function declarations.
+
+    Shared by extract_modules_and_functions (which emits these ranges) and
+    extract_other_statements (which must not emit them).
+    """
+    module_starts = {ln for ln, cls in classification.items() if cls is ModuleDeclaration}
+    function_starts = {ln for ln, cls in classification.items() if cls is FunctionDeclaration}
+    # Function literals (var = function(...)) are blanked before AST parsing so they don't
+    # appear in classification — detect them directly from source lines.
+    function_literal_starts = {i + 1 for i, ln in enumerate(lines) if FUNCTION_LITERAL_RE.match(ln)}
+
+    spans: list[tuple[int, int]] = []
+    inside_module = False
+    inside_block_comment = False
+    start = 0
+    end = 0
+    brace_depth = 0
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        line_num = i + 1
+        stripped = line.strip()
+
+        # Block comment tracking — braces inside a comment must not affect the depth count
+        if inside_block_comment:
+            if inside_module:
+                end = line_num
+            if "*/" in stripped:
+                inside_block_comment = False
+            i += 1
+            continue
+
+        if stripped.startswith("/*") and "*/" not in stripped:
+            inside_block_comment = True
+            if inside_module:
+                end = line_num
+            i += 1
+            continue
+
+        # Collecting a module body — it runs until the braces balance
+        if inside_module:
+            end = line_num
+            brace_depth += line.count("{") - line.count("}")
+            if brace_depth <= 0:
+                inside_module = False
+                spans.append((start, end))
+            i += 1
+            continue
+
+        # AST-confirmed top-level module definition
+        if line_num in module_starts:
+            inside_module = True
+            start = end = line_num
+            brace_depth = line.count("{") - line.count("}")
+
+            # Handle multiline module signature (opening brace on a later line)
+            if brace_depth == 0 and "{" not in line:
+                j = i + 1
+                while j < len(lines) and "{" not in lines[j]:
+                    end = j + 1
+                    j += 1
+                if j < len(lines):
+                    end = j + 1
+                    brace_depth = lines[j].count("{") - lines[j].count("}")
+                    i = j
+
+            if brace_depth <= 0:
+                inside_module = False
+                spans.append((start, end))
+            i += 1
+            continue
+
+        # AST-confirmed top-level function (terminated by semicolon)
+        if line_num in function_starts or line_num in function_literal_starts:
+            if not line.split("//")[0].rstrip().endswith(";"):
+                i += 1
+                while i < len(lines) and not lines[i].split("//")[0].rstrip().endswith(";"):
+                    i += 1
+            spans.append((line_num, min(i + 1, len(lines))))
+            i += 1
+            continue
+
+        i += 1  # Skip everything else (variables, calls, use/include, comments)
+
+    if inside_module:  # unbalanced braces — emit what was collected rather than dropping it
+        spans.append((start, end))
+    return spans
+
+
+def _declared_lines(lines: list[str], classification: dict[int, type]) -> set[int]:
+    """1-indexed line numbers claimed by a top-level declaration or a use/include directive.
+
+    Only used to keep the source-level control-structure fallback in
+    extract_other_statements from firing on an `if`/`for` that is really part of a list
+    comprehension inside a multi-line assignment.
+    """
+    declared: set[int] = set()
+    for span_start, span_end in _declaration_spans(lines, classification):
+        declared.update(range(span_start, span_end + 1))
+
+    for assignment_start in (ln for ln, cls in classification.items() if cls is Assignment):
+        line_num = assignment_start
+        while line_num <= len(lines):
+            declared.add(line_num)
+            if lines[line_num - 1].split("//")[0].rstrip().endswith(";"):
+                break
+            line_num += 1
+
+    declared.update(i + 1 for i, ln in enumerate(lines) if INCLUDE_RE.match(ln))
+    return declared
+
+
+def _statement_ends(stripped: str, brace_depth: int) -> bool:
+    """True when a buffered statement is complete at this line."""
+    # Tested both with and without any trailing line comment: stripping `//` would break on a
+    # string containing one (a url), keeping it would break on a real trailing comment.
+    for text in (stripped, stripped.split("//")[0].rstrip()):
+        if (brace_depth <= 0 and text.endswith(";")) or (brace_depth == 0 and text.endswith("}")):
+            return True
+    return False
+
+
+def _else_follows(lines: list[str], start: int) -> bool:
+    """True if the next actual code at/after index `start` opens an `else` clause.
+
+    Blank lines and comments (line and block) in between are skipped, so an `else` that a
+    reader sees as continuing the preceding `if` is treated as part of the same statement
+    rather than dropped as an unrecognised line.
+    """
+    inside_block_comment = False
+    for line in lines[start:]:
+        rest = line
+        while True:
+            if inside_block_comment:
+                if "*/" not in rest:
+                    break
+                rest = rest.split("*/", 1)[1]
+                inside_block_comment = False
+            code = rest.lstrip()
+            if not code or code.startswith("//"):
+                break
+            if code.startswith("/*"):
+                rest = code[2:]
+                inside_block_comment = True
+                continue
+            return ELSE_START_RE.match(code) is not None
+    return False
 
 
 def extract_top_level_items(lines: list[str], defined_variables: set[str] | None = None) -> tuple[list[str], set[str]]:
@@ -136,6 +291,12 @@ def extract_other_statements(lines: list[str]) -> list[str]:
     # Everything not in the skip set is a module call or control structure to emit.
     call_starts = {ln for ln, cls in classification.items() if cls not in _SKIP_IN_OTHER_STATEMENTS}
 
+    # A brace-bodied `if`/`for` at top level produces no AST node, so it is invisible to
+    # classification — recognise those from source, skipping any line a declaration already
+    # claims (a list comprehension starts lines with `if`/`for` too).
+    declared = _declared_lines(lines, classification)
+    control_starts = {i + 1 for i, ln in enumerate(lines) if CONTROL_START_RE.match(ln) and i + 1 not in declared}
+
     # Bare { } scoping blocks (OpenSCAD trick to hide vars from Customizer) don't appear
     # as typed AST nodes — detect them directly from source content.
     scope_line_starts = {i + 1 for i, ln in enumerate(lines) if ln.strip() == "{"}
@@ -158,6 +319,8 @@ def extract_other_statements(lines: list[str]) -> list[str]:
         if inside_block_comment:
             if inside_scope:
                 scope_buf.append(line)
+            elif inside_statement:
+                statement_lines.append(line)
             if "*/" in stripped:
                 inside_block_comment = False
             i += 1
@@ -176,14 +339,17 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # Collecting a multi-line module call
+        # Collecting a multi-line module call or if/else chain
         if inside_statement:
             statement_lines.append(line)
+            if stripped.startswith("/*") and "*/" not in stripped:
+                inside_block_comment = True
+                i += 1
+                continue
             statement_brace_depth += line.count("{") - line.count("}")
-            done = (statement_brace_depth <= 0 and stripped.endswith(";")) or (
-                statement_brace_depth == 0 and stripped.endswith("}")
-            )
-            if done:
+            # An `else` on the next code line continues this statement — without this the
+            # rest of the chain matches nothing and is silently dropped.
+            if _statement_ends(stripped, statement_brace_depth) and not _else_follows(lines, i + 1):
                 inside_statement = False
                 output.extend(statement_lines)
                 statement_lines = []
@@ -199,16 +365,23 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             i += 1
             continue
 
-        # AST-confirmed module call or control structure
-        if line_num in call_starts:
-            if stripped.endswith(";"):
+        # AST-confirmed module call, or a source-detected brace-bodied control structure
+        if line_num in call_starts or line_num in control_starts:
+            statement_brace_depth = line.count("{") - line.count("}")
+            if _statement_ends(stripped, statement_brace_depth) and not _else_follows(lines, i + 1):
                 output.append(line)
+                statement_brace_depth = 0
             else:
                 inside_statement = True
                 statement_lines = [line]
-                statement_brace_depth = line.count("{") - line.count("}")
 
         i += 1
+
+    # Flush anything left unterminated at EOF rather than dropping it silently
+    if inside_statement:
+        output.extend(statement_lines)
+    if inside_scope:
+        output.extend(scope_buf)
 
     return output
 
@@ -218,85 +391,9 @@ def extract_modules_and_functions(lines: list[str]) -> list[str]:
     excluding top-level variables and module calls."""
     classification = _classify_top_level(lines)
 
-    module_starts = {ln for ln, cls in classification.items() if cls is ModuleDeclaration}
-    function_starts = {ln for ln, cls in classification.items() if cls is FunctionDeclaration}
-    # Function literals (var = function(...)) are blanked before AST parsing so they don't
-    # appear in classification — detect them directly from source lines.
-    function_literal_starts = {i + 1 for i, ln in enumerate(lines) if FUNCTION_LITERAL_RE.match(ln)}
-
     output: list[str] = []
-    inside_module = False
-    brace_depth = 0
-    inside_block_comment = False
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        line_num = i + 1
-        stripped = line.strip()
-
-        # Block comment tracking (needed for correct brace counting inside modules)
-        if inside_block_comment:
-            if inside_module:
-                output.append(line)
-            if "*/" in stripped:
-                inside_block_comment = False
-            i += 1
-            continue
-
-        if stripped.startswith("/*") and "*/" not in stripped:
-            inside_block_comment = True
-            if inside_module:
-                output.append(line)
-            i += 1
-            continue
-
-        # Collecting a module body — emit all lines until braces balance
-        if inside_module:
-            output.append(line)
-            brace_depth += line.count("{") - line.count("}")
-            if brace_depth <= 0:
-                inside_module = False
-            i += 1
-            continue
-
-        # AST-confirmed top-level module definition
-        if line_num in module_starts:
-            inside_module = True
-            output.append(line)
-            brace_depth = line.count("{") - line.count("}")
-
-            # Handle multiline module signature (opening brace on a later line)
-            if brace_depth == 0 and "{" not in line:
-                j = i + 1
-                while j < len(lines) and "{" not in lines[j]:
-                    output.append(lines[j])
-                    j += 1
-                if j < len(lines):
-                    output.append(lines[j])
-                    brace_depth = lines[j].count("{") - lines[j].count("}")
-                    i = j
-
-            if brace_depth <= 0:
-                inside_module = False
-            i += 1
-            continue
-
-        # AST-confirmed top-level function (terminated by semicolon)
-        if line_num in function_starts or line_num in function_literal_starts:
-            output.append(line)
-            if not line.split("//")[0].rstrip().endswith(";"):
-                i += 1
-                while i < len(lines):
-                    output.append(lines[i])
-                    if lines[i].split("//")[0].rstrip().endswith(";"):
-                        break
-                    i += 1
-            i += 1
-            continue
-
-        i += 1  # Skip everything else (variables, calls, use/include, comments)
-
+    for span_start, span_end in _declaration_spans(lines, classification):
+        output.extend(lines[span_start - 1 : span_end])
     return output
 
 
