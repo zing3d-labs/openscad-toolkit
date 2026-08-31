@@ -702,7 +702,7 @@ def test_compile_used_section_headers_become_hidden():
 
 
 # ---------------------------------------------------------------------------
-# Top-level if / else if / else chains (zing-9nf)
+# Top-level if / else if / else chains
 #
 # Before fix: only the first branch of a top-level if chain reached the output.
 # Continuation lines starting with `else` matched no AST node and no source
