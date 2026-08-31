@@ -29,6 +29,50 @@ ELSE_START_RE = re.compile(r"^\s*else\b")  # continuation of the preceding if st
 _SKIP_IN_OTHER_STATEMENTS = frozenset({ModuleDeclaration, FunctionDeclaration, Assignment, UseStatement, IncludeStatement})
 
 
+def _strip_line(line: str, inside_block_comment: bool) -> tuple[str, bool]:
+    """Return (line with strings and comments removed and whitespace stripped, still-in-block-comment).
+
+    Braces and statement terminators are only meaningful in what is left: a `{`, `}`, `;` or
+    `//` inside a string literal or a comment is text, not syntax.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(line):
+        if inside_block_comment:
+            if line.startswith("*/", i):
+                inside_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+        if line.startswith("//", i):
+            break
+        if line.startswith("/*", i):
+            inside_block_comment = True
+            i += 2
+            continue
+        if line[i] == '"':
+            i += 1
+            while i < len(line) and line[i] != '"':
+                i += 2 if line[i] == "\\" else 1
+            i += 1
+            continue
+        out.append(line[i])
+        i += 1
+    return "".join(out).strip(), inside_block_comment
+
+
+def _code_lines(lines: list[str]) -> list[tuple[str, bool]]:
+    """Per line: its code with strings/comments stripped, and whether it began inside a block comment."""
+    result: list[tuple[str, bool]] = []
+    inside_block_comment = False
+    for line in lines:
+        started_in_comment = inside_block_comment
+        code, inside_block_comment = _strip_line(line, inside_block_comment)
+        result.append((code, started_in_comment))
+    return result
+
+
 def _classify_top_level(lines: list[str]) -> dict[int, type]:
     """Parse source and return {1-indexed line: AST node class} for top-level nodes.
 
@@ -144,7 +188,7 @@ def _declaration_spans(lines: list[str], classification: dict[int, type]) -> lis
     return spans
 
 
-def _declared_lines(lines: list[str], classification: dict[int, type]) -> set[int]:
+def _declared_lines(lines: list[str], classification: dict[int, type], code_lines: list[tuple[str, bool]]) -> set[int]:
     """1-indexed line numbers claimed by a top-level declaration or a use/include directive.
 
     Only used to keep the source-level control-structure fallback in
@@ -159,7 +203,7 @@ def _declared_lines(lines: list[str], classification: dict[int, type]) -> set[in
         line_num = assignment_start
         while line_num <= len(lines):
             declared.add(line_num)
-            if lines[line_num - 1].split("//")[0].rstrip().endswith(";"):
+            if code_lines[line_num - 1][0].endswith(";"):
                 break
             line_num += 1
 
@@ -167,39 +211,25 @@ def _declared_lines(lines: list[str], classification: dict[int, type]) -> set[in
     return declared
 
 
-def _statement_ends(stripped: str, brace_depth: int) -> bool:
-    """True when a buffered statement is complete at this line."""
-    # Tested both with and without any trailing line comment: stripping `//` would break on a
-    # string containing one (a url), keeping it would break on a real trailing comment.
-    for text in (stripped, stripped.split("//")[0].rstrip()):
-        if (brace_depth <= 0 and text.endswith(";")) or (brace_depth == 0 and text.endswith("}")):
-            return True
-    return False
+def _statement_ends(code: str, brace_depth: int) -> bool:
+    """True when a buffered statement is complete at this line.
+
+    `code` must already have strings and comments stripped (see _strip_line) — testing the raw
+    line ends a statement early on a trailing comment that happens to close with `;` or `}`.
+    """
+    return (brace_depth <= 0 and code.endswith(";")) or (brace_depth == 0 and code.endswith("}"))
 
 
-def _else_follows(lines: list[str], start: int) -> bool:
+def _else_follows(code_lines: list[tuple[str, bool]], start: int) -> bool:
     """True if the next actual code at/after index `start` opens an `else` clause.
 
-    Blank lines and comments (line and block) in between are skipped, so an `else` that a
-    reader sees as continuing the preceding `if` is treated as part of the same statement
-    rather than dropped as an unrecognised line.
+    Blank lines and comments in between are skipped, so an `else` that a reader sees as
+    continuing the preceding `if` is treated as part of the same statement rather than
+    dropped as an unrecognised line. An `else` written inside a comment is not code and so
+    does not extend the statement.
     """
-    inside_block_comment = False
-    for line in lines[start:]:
-        rest = line
-        while True:
-            if inside_block_comment:
-                if "*/" not in rest:
-                    break
-                rest = rest.split("*/", 1)[1]
-                inside_block_comment = False
-            code = rest.lstrip()
-            if not code or code.startswith("//"):
-                break
-            if code.startswith("/*"):
-                rest = code[2:]
-                inside_block_comment = True
-                continue
+    for code, _ in code_lines[start:]:
+        if code:
             return ELSE_START_RE.match(code) is not None
     return False
 
@@ -287,22 +317,28 @@ def extract_other_statements(lines: list[str]) -> list[str]:
     """Extracts statements that are not variables, modules, or functions — like module calls
     and scoping blocks ({ } containing variables and calls hidden from customizer)."""
     classification = _classify_top_level(lines)
+    code_lines = _code_lines(lines)
 
     # Everything not in the skip set is a module call or control structure to emit.
     call_starts = {ln for ln, cls in classification.items() if cls not in _SKIP_IN_OTHER_STATEMENTS}
 
     # A brace-bodied `if`/`for` at top level produces no AST node, so it is invisible to
     # classification — recognise those from source, skipping any line a declaration already
-    # claims (a list comprehension starts lines with `if`/`for` too).
-    declared = _declared_lines(lines, classification)
-    control_starts = {i + 1 for i, ln in enumerate(lines) if CONTROL_START_RE.match(ln) and i + 1 not in declared}
+    # claims (a list comprehension starts lines with `if`/`for` too). Without a classification
+    # to exclude against there is no way to tell the two apart, so a failed parse degrades to
+    # emitting nothing extra rather than to emitting comprehension internals.
+    control_starts: set[int] = set()
+    if classification:
+        declared = _declared_lines(lines, classification, code_lines)
+        control_starts = {
+            i + 1 for i, (code, _) in enumerate(code_lines) if CONTROL_START_RE.match(code) and i + 1 not in declared
+        }
 
     # Bare { } scoping blocks (OpenSCAD trick to hide vars from Customizer) don't appear
     # as typed AST nodes — detect them directly from source content.
     scope_line_starts = {i + 1 for i, ln in enumerate(lines) if ln.strip() == "{"}
 
     output: list[str] = []
-    inside_block_comment = False
     inside_statement = False
     statement_lines: list[str] = []
     statement_brace_depth = 0
@@ -310,51 +346,35 @@ def extract_other_statements(lines: list[str]) -> list[str]:
     scope_depth = 0
     scope_buf: list[str] = []
 
-    i = 0
-    while i < len(lines):
-        line = lines[i]
+    for i, line in enumerate(lines):
         line_num = i + 1
-        stripped = line.strip()
-
-        if inside_block_comment:
-            if inside_scope:
-                scope_buf.append(line)
-            elif inside_statement:
-                statement_lines.append(line)
-            if "*/" in stripped:
-                inside_block_comment = False
-            i += 1
-            continue
+        code, started_in_comment = code_lines[i]
 
         # Collecting a bare scoping block verbatim
         if inside_scope:
-            scope_depth += line.count("{") - line.count("}")
+            scope_depth += code.count("{") - code.count("}")
             scope_buf.append(line)
-            if stripped.startswith("/*") and "*/" not in stripped:
-                inside_block_comment = True
             if scope_depth <= 0:
                 output.extend(scope_buf)
                 scope_buf = []
                 inside_scope = False
-            i += 1
             continue
 
         # Collecting a multi-line module call or if/else chain
         if inside_statement:
             statement_lines.append(line)
-            if stripped.startswith("/*") and "*/" not in stripped:
-                inside_block_comment = True
-                i += 1
-                continue
-            statement_brace_depth += line.count("{") - line.count("}")
+            statement_brace_depth += code.count("{") - code.count("}")
             # An `else` on the next code line continues this statement — without this the
             # rest of the chain matches nothing and is silently dropped.
-            if _statement_ends(stripped, statement_brace_depth) and not _else_follows(lines, i + 1):
+            if _statement_ends(code, statement_brace_depth) and not _else_follows(code_lines, i + 1):
                 inside_statement = False
                 output.extend(statement_lines)
                 statement_lines = []
                 statement_brace_depth = 0
-            i += 1
+            continue
+
+        # Commented-out code must not open a statement.
+        if started_in_comment or not code:
             continue
 
         # Bare scoping block
@@ -362,20 +382,17 @@ def extract_other_statements(lines: list[str]) -> list[str]:
             inside_scope = True
             scope_depth = 1
             scope_buf = [line]
-            i += 1
             continue
 
         # AST-confirmed module call, or a source-detected brace-bodied control structure
         if line_num in call_starts or line_num in control_starts:
-            statement_brace_depth = line.count("{") - line.count("}")
-            if _statement_ends(stripped, statement_brace_depth) and not _else_follows(lines, i + 1):
+            statement_brace_depth = code.count("{") - code.count("}")
+            if _statement_ends(code, statement_brace_depth) and not _else_follows(code_lines, i + 1):
                 output.append(line)
                 statement_brace_depth = 0
             else:
                 inside_statement = True
                 statement_lines = [line]
-
-        i += 1
 
     # Flush anything left unterminated at EOF rather than dropping it silently
     if inside_statement:

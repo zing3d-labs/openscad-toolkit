@@ -833,3 +833,101 @@ def test_compile_top_level_if_else_chain_with_use(tmp_path):
     assert 'else echo("none");' in result
     # Variables still lead so the Customizer picks them up
     assert result.index("Sel = 0;") < result.index("if (Sel == 0) a();")
+
+
+# ---------------------------------------------------------------------------
+# Braces and terminators are syntax only outside strings and comments
+#
+# Statement collection counts `{`/`}` and looks for a trailing `;`/`}` to decide
+# where a statement ends. Doing that on the raw line misreads any of those
+# characters that appear inside a string literal or a comment: the statement
+# either ends early (dropping its closing brace) or never ends at all (swallowing
+# the rest of the file, `use` directives included). _strip_line removes strings
+# and comments first so only real code is counted.
+# ---------------------------------------------------------------------------
+
+
+def test_eos_closing_brace_in_trailing_comment_does_not_end_statement():
+    """A `}` inside a comment must not close the block one line early."""
+    lines = [
+        "a = true;\n",
+        "if (a) {\n",
+        "  cube(1);   // TODO: handle the } case\n",
+        "}\n",
+        "sphere(2);\n",
+    ]
+    output = extract_other_statements(lines)
+    joined = "".join(output)
+    assert "if (a) {" in joined
+    assert "sphere(2);" in joined
+    # The real closing brace must be emitted between them, or the output does not parse
+    assert [line.strip() for line in output] == ["if (a) {", "cube(1);   // TODO: handle the } case", "}", "sphere(2);"]
+
+
+def test_eos_opening_brace_in_string_does_not_extend_statement():
+    """A `{` inside a string must not leave the statement open to EOF."""
+    lines = [
+        "a = true;\n",
+        "if (a) {\n",
+        '  echo("{");\n',
+        "}\n",
+        "helper();\n",
+    ]
+    output = extract_other_statements(lines)
+    joined = "".join(output)
+    assert 'echo("{");' in joined
+    assert "helper();" in joined
+    assert output[-1].strip() == "helper();"
+
+
+def test_eos_semicolon_in_string_does_not_end_statement():
+    """`//` and `;` inside a string must not truncate a multi-line call."""
+    lines = [
+        "translate([0, 0, 0])\n",
+        '  text("a;//b",\n',
+        "       size = 5);\n",
+    ]
+    output = extract_other_statements(lines)
+    assert len([line for line in output if line.strip()]) == 3
+    assert "size = 5);" in "".join(output)
+
+
+def test_eos_trailing_line_comment_still_ends_statement():
+    """The other direction: a genuine trailing comment must not keep the statement open."""
+    lines = ["cube(1); // a comment\n", "x = 5;\n", "sphere(2);\n"]
+    joined = "".join(extract_other_statements(lines))
+    assert "cube(1);" in joined
+    assert "sphere(2);" in joined
+    assert "x = 5" not in joined  # assignment belongs to extract_top_level_items
+
+
+def test_eos_degraded_parse_emits_no_comprehension_fragment():
+    """With no usable AST, the control-structure fallback must stay off.
+
+    A multi-line function literal defeats openscad_parser, leaving no classification to
+    tell a real top-level `if` from a list comprehension's. Emitting nothing extra is
+    incomplete; emitting the comprehension's guts is a syntax error.
+    """
+    lines = [
+        "evens = function (m)\n",
+        "    [ for (i = [0:m]) if (i % 2 == 0) i ];\n",
+        "rows = [\n",
+        "  for (i = [0:3])\n",
+        "  if (i > 1) i\n",
+        "];\n",
+    ]
+    joined = "".join(extract_other_statements(lines))
+    assert "if (i > 1)" not in joined
+    assert "for (i = [0:3])" not in joined
+
+
+def test_compile_use_directive_not_leaked_by_brace_in_string(tmp_path):
+    """An unterminated statement must never swallow a `use`, leaving it live in the output."""
+    (tmp_path / "helper.scad").write_text("module helper() { cylinder(r=1, h=5); }\n")
+    src = tmp_path / "entry.scad"
+    src.write_text('a = true;\nif (a) {\n  echo("{");\n}\nuse <helper.scad>\nhelper();\n')
+    result = compile_scad(str(src))
+    # A surviving `use` means the compiled file is not self-contained
+    assert "use <" not in result
+    assert "module helper()" in result
+    assert result.count("module helper()") == 1
